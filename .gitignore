@@ -1,0 +1,32 @@
+# Unreal Engine generated files
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+
+# Visual Studio generated files
+.vs/
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build output and logs
+*.log
+*.tmp
+*.obj
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.lib
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
