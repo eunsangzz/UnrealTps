@@ -11,10 +11,11 @@
 #include "InputCoreTypes.h"
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
+#include "../Components/WeaponComponent.h"
 
 ATPSCharacter::ATPSCharacter()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 
 	bUseControllerRotationPitch = false;
 	bUseControllerRotationYaw = false;
@@ -42,7 +43,16 @@ ATPSCharacter::ATPSCharacter()
 	FollowCamera->bUsePawnControlRotation = false;
 	FollowCamera->FieldOfView = DefaultFOV;
 
+	WeaponComponent = CreateDefaultSubobject<UWeaponComponent>(TEXT("WeaponComponent"));
+
 	ConfigureDefaultInput();
+}
+
+void ATPSCharacter::Tick(float DeltaTime)
+{
+	Super::Tick(DeltaTime);
+
+	UpdateAimOffsets();
 }
 
 void ATPSCharacter::BeginPlay()
@@ -75,6 +85,9 @@ void ATPSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 	EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Completed, this, &ATPSCharacter::StopSprint);
 	EnhancedInputComponent->BindAction(AimAction, ETriggerEvent::Started, this, &ATPSCharacter::StartAim);
 	EnhancedInputComponent->BindAction(AimAction, ETriggerEvent::Completed, this, &ATPSCharacter::StopAim);
+	EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Started, this, &ATPSCharacter::StartFire);
+	EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Completed, this, &ATPSCharacter::StopFire);
+	EnhancedInputComponent->BindAction(ReloadAction, ETriggerEvent::Started, this, &ATPSCharacter::Reload);
 }
 
 void ATPSCharacter::Move(const FInputActionValue& Value)
@@ -111,12 +124,18 @@ void ATPSCharacter::Look(const FInputActionValue& Value)
 
 void ATPSCharacter::StartSprint()
 {
-	GetCharacterMovement()->MaxWalkSpeed = SprintSpeed;
+	bIsSprinting = true;
+
+	if (!bIsAiming)
+	{
+		GetCharacterMovement()->MaxWalkSpeed = SprintSpeed;
+	}
 }
 
 void ATPSCharacter::StopSprint()
 {
-	GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
+	bIsSprinting = false;
+	GetCharacterMovement()->MaxWalkSpeed = bIsAiming ? AimWalkSpeed : WalkSpeed;
 }
 
 void ATPSCharacter::StartAim()
@@ -127,6 +146,30 @@ void ATPSCharacter::StartAim()
 void ATPSCharacter::StopAim()
 {
 	SetAiming(false);
+}
+
+void ATPSCharacter::StartFire()
+{
+	if (WeaponComponent)
+	{
+		WeaponComponent->StartFire();
+	}
+}
+
+void ATPSCharacter::StopFire()
+{
+	if (WeaponComponent)
+	{
+		WeaponComponent->StopFire();
+	}
+}
+
+void ATPSCharacter::Reload()
+{
+	if (WeaponComponent)
+	{
+		WeaponComponent->Reload();
+	}
 }
 
 void ATPSCharacter::Jump()
@@ -143,6 +186,7 @@ void ATPSCharacter::SetAiming(bool bNewAiming)
 		bIsScoped = false;
 	}
 
+	ApplyAimingState();
 	ApplyCameraFOV();
 }
 
@@ -176,6 +220,12 @@ void ATPSCharacter::ConfigureDefaultInput()
 	AimAction = CreateDefaultSubobject<UInputAction>(TEXT("IA_Aim"));
 	AimAction->ValueType = EInputActionValueType::Boolean;
 
+	FireAction = CreateDefaultSubobject<UInputAction>(TEXT("IA_Fire"));
+	FireAction->ValueType = EInputActionValueType::Boolean;
+
+	ReloadAction = CreateDefaultSubobject<UInputAction>(TEXT("IA_Reload"));
+	ReloadAction->ValueType = EInputActionValueType::Boolean;
+
 	DefaultMappingContext = CreateDefaultSubobject<UInputMappingContext>(TEXT("IMC_Default"));
 
 	UInputModifierSwizzleAxis* MoveSwizzle = CreateDefaultSubobject<UInputModifierSwizzleAxis>(TEXT("MoveSwizzle"));
@@ -206,6 +256,8 @@ void ATPSCharacter::ConfigureDefaultInput()
 	DefaultMappingContext->MapKey(JumpAction, EKeys::SpaceBar);
 	DefaultMappingContext->MapKey(SprintAction, EKeys::LeftShift);
 	DefaultMappingContext->MapKey(AimAction, EKeys::RightMouseButton);
+	DefaultMappingContext->MapKey(FireAction, EKeys::LeftMouseButton);
+	DefaultMappingContext->MapKey(ReloadAction, EKeys::R);
 }
 
 void ATPSCharacter::ApplyCameraFOV()
@@ -227,4 +279,37 @@ void ATPSCharacter::ApplyCameraFOV()
 	{
 		FollowCamera->SetFieldOfView(DefaultFOV);
 	}
+}
+
+void ATPSCharacter::ApplyAimingState()
+{
+	if (bIsAiming)
+	{
+		bUseControllerRotationYaw = true;
+		GetCharacterMovement()->bOrientRotationToMovement = false;
+		GetCharacterMovement()->MaxWalkSpeed = AimWalkSpeed;
+	}
+	else
+	{
+		bUseControllerRotationYaw = false;
+		GetCharacterMovement()->bOrientRotationToMovement = true;
+		GetCharacterMovement()->MaxWalkSpeed = bIsSprinting ? SprintSpeed : WalkSpeed;
+	}
+}
+
+void ATPSCharacter::UpdateAimOffsets()
+{
+	if (!Controller)
+	{
+		AimYaw = 0.0f;
+		AimPitch = 0.0f;
+		return;
+	}
+
+	const FRotator ControlRotation = Controller->GetControlRotation();
+	const FRotator ActorRotation = GetActorRotation();
+	const FRotator DeltaRotation = (ControlRotation - ActorRotation).GetNormalized();
+
+	AimYaw = DeltaRotation.Yaw;
+	AimPitch = DeltaRotation.Pitch;
 }

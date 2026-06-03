@@ -10,6 +10,7 @@
 class UCameraComponent;
 class UInputAction;
 class UInputMappingContext;
+class UWeaponComponent;
 class USpringArmComponent;
 
 UCLASS()
@@ -20,6 +21,7 @@ class UNREALTPS_API ATPSCharacter : public ACharacter
 public:
 	ATPSCharacter();
 
+	virtual void Tick(float DeltaTime) override;
 	virtual void Jump() override;
 
 	UFUNCTION(BlueprintCallable, Category = "Camera")
@@ -27,6 +29,15 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Camera")
 	void SetScoped(bool bNewScoped);
+
+	UFUNCTION(BlueprintPure, Category = "Aiming")
+	bool IsAiming() const { return bIsAiming; }
+
+	UFUNCTION(BlueprintPure, Category = "Aiming")
+	float GetAimYaw() const { return AimYaw; }
+
+	UFUNCTION(BlueprintPure, Category = "Aiming")
+	float GetAimPitch() const { return AimPitch; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -38,12 +49,18 @@ protected:
 	void StopSprint();
 	void StartAim();
 	void StopAim();
+	void StartFire();
+	void StopFire();
+	void Reload();
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
 	TObjectPtr<USpringArmComponent> CameraBoom;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
 	TObjectPtr<UCameraComponent> FollowCamera;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weapon")
+	TObjectPtr<UWeaponComponent> WeaponComponent;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera")
 	float DefaultFOV = 90.0f;
@@ -73,7 +90,16 @@ protected:
 	float SprintSpeed = 720.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Movement")
+	float AimWalkSpeed = 260.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Movement")
 	float JumpZVelocity = 600.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Aiming")
+	float AimYaw = 0.0f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Aiming")
+	float AimPitch = 0.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputMappingContext> DefaultMappingContext;
@@ -94,12 +120,21 @@ protected:
 	TObjectPtr<UInputAction> AimAction;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> FireAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> ReloadAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	int32 InputMappingPriority = 0;
 
 private:
 	void ConfigureDefaultInput();
 	void ApplyCameraFOV();
+	void ApplyAimingState();
+	void UpdateAimOffsets();
 
+	bool bIsSprinting = false;
 	bool bIsAiming = false;
 	bool bIsScoped = false;
 };
