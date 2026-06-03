@@ -30,12 +30,17 @@ ATPSCharacter::ATPSCharacter()
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
-	CameraBoom->TargetArmLength = 350.0f;
+	CameraBoom->TargetArmLength = CameraArmLength;
+	CameraBoom->SocketOffset = ShoulderOffset;
 	CameraBoom->bUsePawnControlRotation = true;
+	CameraBoom->bDoCollisionTest = true;
+	CameraBoom->ProbeSize = CameraProbeSize;
+	CameraBoom->ProbeChannel = ECC_Camera;
 
 	FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
 	FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
 	FollowCamera->bUsePawnControlRotation = false;
+	FollowCamera->FieldOfView = DefaultFOV;
 
 	ConfigureDefaultInput();
 }
@@ -68,6 +73,8 @@ void ATPSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 	EnhancedInputComponent->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 	EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Started, this, &ATPSCharacter::StartSprint);
 	EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Completed, this, &ATPSCharacter::StopSprint);
+	EnhancedInputComponent->BindAction(AimAction, ETriggerEvent::Started, this, &ATPSCharacter::StartAim);
+	EnhancedInputComponent->BindAction(AimAction, ETriggerEvent::Completed, this, &ATPSCharacter::StopAim);
 }
 
 void ATPSCharacter::Move(const FInputActionValue& Value)
@@ -98,8 +105,8 @@ void ATPSCharacter::Look(const FInputActionValue& Value)
 		return;
 	}
 
-	AddControllerYawInput(LookAxisVector.X);
-	AddControllerPitchInput(LookAxisVector.Y);
+	AddControllerYawInput(LookAxisVector.X * MouseSensitivity);
+	AddControllerPitchInput(LookAxisVector.Y * MouseSensitivity);
 }
 
 void ATPSCharacter::StartSprint()
@@ -112,9 +119,43 @@ void ATPSCharacter::StopSprint()
 	GetCharacterMovement()->MaxWalkSpeed = WalkSpeed;
 }
 
+void ATPSCharacter::StartAim()
+{
+	SetAiming(true);
+}
+
+void ATPSCharacter::StopAim()
+{
+	SetAiming(false);
+}
+
 void ATPSCharacter::Jump()
 {
 	Super::Jump();
+}
+
+void ATPSCharacter::SetAiming(bool bNewAiming)
+{
+	bIsAiming = bNewAiming;
+
+	if (!bIsAiming)
+	{
+		bIsScoped = false;
+	}
+
+	ApplyCameraFOV();
+}
+
+void ATPSCharacter::SetScoped(bool bNewScoped)
+{
+	bIsScoped = bNewScoped;
+
+	if (bIsScoped)
+	{
+		bIsAiming = true;
+	}
+
+	ApplyCameraFOV();
 }
 
 void ATPSCharacter::ConfigureDefaultInput()
@@ -131,6 +172,9 @@ void ATPSCharacter::ConfigureDefaultInput()
 
 	SprintAction = CreateDefaultSubobject<UInputAction>(TEXT("IA_Sprint"));
 	SprintAction->ValueType = EInputActionValueType::Boolean;
+
+	AimAction = CreateDefaultSubobject<UInputAction>(TEXT("IA_Aim"));
+	AimAction->ValueType = EInputActionValueType::Boolean;
 
 	DefaultMappingContext = CreateDefaultSubobject<UInputMappingContext>(TEXT("IMC_Default"));
 
@@ -161,4 +205,26 @@ void ATPSCharacter::ConfigureDefaultInput()
 	DefaultMappingContext->MapKey(LookAction, EKeys::Mouse2D);
 	DefaultMappingContext->MapKey(JumpAction, EKeys::SpaceBar);
 	DefaultMappingContext->MapKey(SprintAction, EKeys::LeftShift);
+	DefaultMappingContext->MapKey(AimAction, EKeys::RightMouseButton);
+}
+
+void ATPSCharacter::ApplyCameraFOV()
+{
+	if (!FollowCamera)
+	{
+		return;
+	}
+
+	if (bIsScoped)
+	{
+		FollowCamera->SetFieldOfView(ScopeFOV);
+	}
+	else if (bIsAiming)
+	{
+		FollowCamera->SetFieldOfView(AimFOV);
+	}
+	else
+	{
+		FollowCamera->SetFieldOfView(DefaultFOV);
+	}
 }
