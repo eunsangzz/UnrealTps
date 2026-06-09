@@ -8,6 +8,7 @@
 #include "TPSCharacter.generated.h"
 
 class UCameraComponent;
+class UHealthComponent;
 class UInputAction;
 class UInputMappingContext;
 class UWeaponComponent;
@@ -61,6 +62,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weapon")
 	TObjectPtr<UWeaponComponent> WeaponComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Health")
+	TObjectPtr<UHealthComponent> HealthComponent;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera")
 	float DefaultFOV = 90.0f;

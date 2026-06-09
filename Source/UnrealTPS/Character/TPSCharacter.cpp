@@ -11,6 +11,7 @@
 #include "InputCoreTypes.h"
 #include "InputMappingContext.h"
 #include "InputModifiers.h"
+#include "../Components/HealthComponent.h"
 #include "../Components/WeaponComponent.h"
 
 ATPSCharacter::ATPSCharacter()
@@ -44,6 +45,7 @@ ATPSCharacter::ATPSCharacter()
 	FollowCamera->FieldOfView = DefaultFOV;
 
 	WeaponComponent = CreateDefaultSubobject<UWeaponComponent>(TEXT("WeaponComponent"));
+	HealthComponent = CreateDefaultSubobject<UHealthComponent>(TEXT("HealthComponent"));
 
 	ConfigureDefaultInput();
 }
@@ -119,7 +121,7 @@ void ATPSCharacter::Look(const FInputActionValue& Value)
 	}
 
 	AddControllerYawInput(LookAxisVector.X * MouseSensitivity);
-	AddControllerPitchInput(LookAxisVector.Y * MouseSensitivity);
+	AddControllerPitchInput(-LookAxisVector.Y * MouseSensitivity);
 }
 
 void ATPSCharacter::StartSprint()
