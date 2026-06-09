@@ -9,6 +9,8 @@
 
 class UCameraComponent;
 class UHealthComponent;
+class UAnimMontage;
+class UAnimSequenceBase;
 class UInputAction;
 class UInputMappingContext;
 class UWeaponComponent;
@@ -53,6 +55,12 @@ protected:
 	void StartFire();
 	void StopFire();
 	void Reload();
+
+	UFUNCTION()
+	void HandleWeaponFired();
+
+	UFUNCTION()
+	void HandleWeaponReloaded();
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
 	TObjectPtr<USpringArmComponent> CameraBoom;
@@ -132,11 +140,24 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	int32 InputMappingPriority = 0;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimMontage> FireMontage;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> ReloadAnimation;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> AimLoopAnimation;
+
 private:
 	void ConfigureDefaultInput();
 	void ApplyCameraFOV();
 	void ApplyAimingState();
 	void UpdateAimOffsets();
+	void ApplyAimAnimation();
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimMontage> ActiveAimMontage;
 
 	bool bIsSprinting = false;
 	bool bIsAiming = false;

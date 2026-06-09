@@ -8,6 +8,9 @@
 
 class AWeaponBase;
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnWeaponFiredSignature);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnWeaponReloadedSignature);
+
 UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
 class UNREALTPS_API UWeaponComponent : public UActorComponent
 {
@@ -38,6 +41,12 @@ public:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon")
 	FName WeaponSocketName = TEXT("WeaponSocket");
+
+	UPROPERTY(BlueprintAssignable, Category = "Weapon|Events")
+	FOnWeaponFiredSignature OnWeaponFired;
+
+	UPROPERTY(BlueprintAssignable, Category = "Weapon|Events")
+	FOnWeaponReloadedSignature OnWeaponReloaded;
 
 private:
 	void EquipDefaultWeapon();

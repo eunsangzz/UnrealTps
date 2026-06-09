@@ -8,6 +8,10 @@
 #include "EnemyCharacter.generated.h"
 
 class ATPSAIController;
+class UAnimationAsset;
+class UAnimMontage;
+class UAnimSequenceBase;
+class UBlendSpace;
 class UHealthComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
@@ -89,6 +93,13 @@ private:
 	void ChangeState(EEnemyState NewState);
 	void SelectPatrolDestination();
 	void PerformAttack();
+	void InitializeAnimation();
+	void UpdateLocomotionAnimation();
+	void PlayAttackAnimation();
+	void PlayHitAnimation();
+	void PlayDeathAnimation();
+	void PlayActionAnimation(UAnimSequenceBase* Animation, bool bRestoreLocomotion);
+	void RestoreLocomotionAnimation();
 
 	bool TryAcquireTarget();
 	bool CanSeeTarget(const AActor* Target) const;
@@ -98,6 +109,28 @@ private:
 	UFUNCTION()
 	void HandleDeath(UHealthComponent* Component, AController* InstigatedBy, AActor* DamageCauser);
 
+	UFUNCTION()
+	void HandleDamaged(UHealthComponent* Component, float DamageAmount, AController* InstigatedBy, AActor* DamageCauser);
+
+protected:
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UBlendSpace> LocomotionBlendSpace;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> AttackAnimation;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimMontage> AttackMontage;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> HitAnimation;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> DeathAnimation;
+
+	bool bUseSingleNodeLocomotion = false;
+
+private:
 	UPROPERTY()
 	TObjectPtr<AActor> TargetActor;
 
@@ -105,4 +138,24 @@ private:
 	FVector PatrolDestination = FVector::ZeroVector;
 	float IdleElapsed = 0.0f;
 	double LastAttackTime = -1000.0;
+	bool bPlayingActionAnimation = false;
+	FTimerHandle AnimationTimerHandle;
+};
+
+UCLASS()
+class UNREALTPS_API AMeleeEnemyCharacter : public AEnemyCharacter
+{
+	GENERATED_BODY()
+
+public:
+	AMeleeEnemyCharacter();
+};
+
+UCLASS()
+class UNREALTPS_API ARangedEnemyCharacter : public AEnemyCharacter
+{
+	GENERATED_BODY()
+
+public:
+	ARangedEnemyCharacter();
 };

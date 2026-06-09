@@ -3,7 +3,16 @@
 #include "EnemyCharacter.h"
 
 #include "AIController.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimSequenceBase.h"
+#include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/BlendSpace.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "NavigationSystem.h"
+#include "TimerManager.h"
+#include "UObject/ConstructorHelpers.h"
 #include "../AI/TPSAIController.h"
 #include "../Components/HealthComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -31,6 +40,8 @@ void AEnemyCharacter::BeginPlay()
 	ConfigureForEnemyType();
 	GetCharacterMovement()->MaxWalkSpeed = PatrolSpeed;
 	HealthComponent->OnDeath.AddDynamic(this, &AEnemyCharacter::HandleDeath);
+	HealthComponent->OnDamaged.AddDynamic(this, &AEnemyCharacter::HandleDamaged);
+	InitializeAnimation();
 	ChangeState(EEnemyState::Idle);
 }
 
@@ -41,6 +52,7 @@ void AEnemyCharacter::Tick(float DeltaTime)
 	if (CurrentState != EEnemyState::Dead)
 	{
 		UpdateStateMachine(DeltaTime);
+		UpdateLocomotionAnimation();
 	}
 }
 
@@ -222,6 +234,7 @@ void AEnemyCharacter::PerformAttack()
 	}
 
 	LastAttackTime = World->GetTimeSeconds();
+	PlayAttackAnimation();
 	UGameplayStatics::ApplyDamage(TargetActor, AttackDamage, GetController(), this, nullptr);
 }
 
@@ -293,6 +306,7 @@ void AEnemyCharacter::HandleDeath(UHealthComponent* Component, AController* Inst
 {
 	ChangeState(EEnemyState::Dead);
 	TargetActor = nullptr;
+	PlayDeathAnimation();
 
 	if (AAIController* AIController = Cast<AAIController>(GetController()))
 	{
@@ -302,4 +316,185 @@ void AEnemyCharacter::HandleDeath(UHealthComponent* Component, AController* Inst
 
 	GetCharacterMovement()->DisableMovement();
 	SetActorEnableCollision(false);
+}
+
+void AEnemyCharacter::HandleDamaged(UHealthComponent* Component, float DamageAmount, AController* InstigatedBy, AActor* DamageCauser)
+{
+	if (CurrentState != EEnemyState::Dead)
+	{
+		PlayHitAnimation();
+	}
+}
+
+void AEnemyCharacter::InitializeAnimation()
+{
+	if (!bUseSingleNodeLocomotion || !LocomotionBlendSpace)
+	{
+		return;
+	}
+
+	GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+	GetMesh()->PlayAnimation(LocomotionBlendSpace, true);
+}
+
+void AEnemyCharacter::UpdateLocomotionAnimation()
+{
+	if (!bUseSingleNodeLocomotion || bPlayingActionAnimation)
+	{
+		return;
+	}
+
+	if (UAnimSingleNodeInstance* SingleNodeInstance = GetMesh()->GetSingleNodeInstance())
+	{
+		const float Speed = GetVelocity().Size2D();
+		SingleNodeInstance->SetBlendSpacePosition(FVector(Speed, 0.0f, 0.0f));
+	}
+}
+
+void AEnemyCharacter::PlayAttackAnimation()
+{
+	if (AttackMontage)
+	{
+		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+		{
+			AnimInstance->Montage_Play(AttackMontage);
+		}
+		return;
+	}
+
+	PlayActionAnimation(AttackAnimation, true);
+}
+
+void AEnemyCharacter::PlayHitAnimation()
+{
+	PlayActionAnimation(HitAnimation, true);
+}
+
+void AEnemyCharacter::PlayDeathAnimation()
+{
+	GetWorldTimerManager().ClearTimer(AnimationTimerHandle);
+	bPlayingActionAnimation = true;
+
+	if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+	{
+		if (DeathAnimation && !bUseSingleNodeLocomotion)
+		{
+			AnimInstance->PlaySlotAnimationAsDynamicMontage(DeathAnimation, TEXT("DefaultSlot"), 0.1f, 0.2f);
+			return;
+		}
+	}
+
+	if (DeathAnimation)
+	{
+		GetMesh()->PlayAnimation(DeathAnimation, false);
+	}
+}
+
+void AEnemyCharacter::PlayActionAnimation(UAnimSequenceBase* Animation, bool bRestoreLocomotion)
+{
+	if (!Animation || CurrentState == EEnemyState::Dead)
+	{
+		return;
+	}
+
+	if (!bUseSingleNodeLocomotion)
+	{
+		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+		{
+			AnimInstance->PlaySlotAnimationAsDynamicMontage(Animation, TEXT("DefaultSlot"), 0.1f, 0.15f);
+		}
+		return;
+	}
+
+	bPlayingActionAnimation = true;
+	GetMesh()->PlayAnimation(Animation, false);
+
+	if (bRestoreLocomotion)
+	{
+		GetWorldTimerManager().SetTimer(
+			AnimationTimerHandle,
+			this,
+			&AEnemyCharacter::RestoreLocomotionAnimation,
+			FMath::Max(0.1f, Animation->GetPlayLength()),
+			false);
+	}
+}
+
+void AEnemyCharacter::RestoreLocomotionAnimation()
+{
+	if (CurrentState == EEnemyState::Dead || !LocomotionBlendSpace)
+	{
+		return;
+	}
+
+	bPlayingActionAnimation = false;
+	GetMesh()->PlayAnimation(LocomotionBlendSpace, true);
+}
+
+AMeleeEnemyCharacter::AMeleeEnemyCharacter()
+{
+	EnemyType = EEnemyType::Melee;
+	bUseSingleNodeLocomotion = true;
+
+	GetCapsuleComponent()->InitCapsuleSize(42.0f, 88.0f);
+
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> MinionMesh(
+		TEXT("/Game/ParagonMinions/Characters/Minions/Down_Minions/Meshes/Minion_Lane_Melee_Dawn.Minion_Lane_Melee_Dawn"));
+	if (MinionMesh.Succeeded())
+	{
+		GetMesh()->SetSkeletalMesh(MinionMesh.Object);
+		GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -88.0f));
+		GetMesh()->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
+	}
+
+	static ConstructorHelpers::FObjectFinder<UBlendSpace> MinionLocomotion(
+		TEXT("/Game/ParagonMinions/Characters/Minions/Down_Minions/Animations/Melee/Blendspaces/IdleToRun_A_Combat.IdleToRun_A_Combat"));
+	LocomotionBlendSpace = MinionLocomotion.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> MinionAttack(
+		TEXT("/Game/ParagonMinions/Characters/Minions/Down_Minions/Animations/Melee/Attack_A.Attack_A"));
+	AttackAnimation = MinionAttack.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> MinionHit(
+		TEXT("/Game/ParagonMinions/Characters/Minions/Down_Minions/Animations/Melee/HitReact_Front.HitReact_Front"));
+	HitAnimation = MinionHit.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> MinionDeath(
+		TEXT("/Game/ParagonMinions/Characters/Minions/Down_Minions/Animations/Melee/Death_A.Death_A"));
+	DeathAnimation = MinionDeath.Object;
+}
+
+ARangedEnemyCharacter::ARangedEnemyCharacter()
+{
+	EnemyType = EEnemyType::Ranged;
+
+	GetCapsuleComponent()->InitCapsuleSize(42.0f, 96.0f);
+
+	static ConstructorHelpers::FObjectFinder<USkeletalMesh> WraithMesh(
+		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Meshes/Wraith.Wraith"));
+	if (WraithMesh.Succeeded())
+	{
+		GetMesh()->SetSkeletalMesh(WraithMesh.Object);
+		GetMesh()->SetRelativeLocation(FVector(0.0f, 0.0f, -96.0f));
+		GetMesh()->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
+	}
+
+	static ConstructorHelpers::FClassFinder<UAnimInstance> WraithAnimBlueprint(
+		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Wraith_AnimBlueprint"));
+	if (WraithAnimBlueprint.Succeeded())
+	{
+		GetMesh()->SetAnimInstanceClass(WraithAnimBlueprint.Class);
+	}
+
+	static ConstructorHelpers::FObjectFinder<UAnimMontage> WraithAttack(
+		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Animations/Fire_A_Slow_Montage.Fire_A_Slow_Montage"));
+	AttackMontage = WraithAttack.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> WraithHit(
+		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Animations/HitReact_Front.HitReact_Front"));
+	HitAnimation = WraithHit.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> WraithDeath(
+		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Animations/Death_Forward.Death_Forward"));
+	DeathAnimation = WraithDeath.Object;
 }

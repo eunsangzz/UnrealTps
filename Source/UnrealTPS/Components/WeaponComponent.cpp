@@ -43,8 +43,13 @@ void UWeaponComponent::Reload()
 	}
 
 	bIsReloading = true;
-	CurrentWeapon->Reload();
+	const bool bReloaded = CurrentWeapon->Reload();
 	bIsReloading = false;
+
+	if (bReloaded)
+	{
+		OnWeaponReloaded.Broadcast();
+	}
 }
 
 bool UWeaponComponent::CanFire() const
@@ -110,6 +115,7 @@ void UWeaponComponent::FireOnce()
 	if (CurrentWeapon->Fire())
 	{
 		LastFireTime = GetWorld()->GetTimeSeconds();
+		OnWeaponFired.Broadcast();
 	}
 }
 
