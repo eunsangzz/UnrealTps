@@ -16,6 +16,7 @@ void UHealthComponent::BeginPlay()
 	MaxHealth = FMath::Max(1.0f, MaxHealth);
 	CurrentHealth = MaxHealth;
 	bIsDead = false;
+	bIsInvulnerable = false;
 
 	if (AActor* Owner = GetOwner())
 	{
@@ -25,7 +26,7 @@ void UHealthComponent::BeginPlay()
 
 float UHealthComponent::TakeDamage(float DamageAmount, AController* InstigatedBy, AActor* DamageCauser)
 {
-	if (bIsDead || DamageAmount <= 0.0f)
+	if (bIsDead || bIsInvulnerable || DamageAmount <= 0.0f)
 	{
 		return 0.0f;
 	}

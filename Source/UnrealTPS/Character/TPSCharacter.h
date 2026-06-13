@@ -13,6 +13,8 @@ class UAnimMontage;
 class UAnimSequenceBase;
 class UInputAction;
 class UInputMappingContext;
+class UMaterialInstanceDynamic;
+class UPointLightComponent;
 class UWeaponComponent;
 class USpringArmComponent;
 
@@ -42,18 +44,30 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Aiming")
 	float GetAimPitch() const { return AimPitch; }
 
+	UFUNCTION(BlueprintPure, Category = "Damage")
+	float GetDamageFlashAlpha() const { return DamageFlashAlpha; }
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	UHealthComponent* GetHealthComponent() const { return HealthComponent; }
+
+	UFUNCTION(BlueprintPure, Category = "UI")
+	UWeaponComponent* GetWeaponComponent() const { return WeaponComponent; }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
 	void Move(const FInputActionValue& Value);
+	void StopMove(const FInputActionValue& Value);
 	void Look(const FInputActionValue& Value);
+	void Dodge();
 	void StartSprint();
 	void StopSprint();
-	void StartAim();
-	void StopAim();
+	void HandleAimClick();
+	void ResolveSingleAimClick();
 	void StartFire();
 	void StopFire();
+	void ToggleFireMode();
 	void Reload();
 
 	UFUNCTION()
@@ -61,6 +75,9 @@ protected:
 
 	UFUNCTION()
 	void HandleWeaponReloaded();
+
+	UFUNCTION()
+	void HandleDamaged(UHealthComponent* Component, float DamageAmount, AController* InstigatedBy, AActor* DamageCauser);
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
 	TObjectPtr<USpringArmComponent> CameraBoom;
@@ -73,6 +90,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Health")
 	TObjectPtr<UHealthComponent> HealthComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Damage")
+	TObjectPtr<UPointLightComponent> DamageFlashLight;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera")
 	float DefaultFOV = 90.0f;
@@ -93,6 +113,24 @@ protected:
 	FVector ShoulderOffset = FVector(0.0f, 75.0f, 60.0f);
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera")
+	FVector ScopeCameraOffset = FVector(10.0f, 0.0f, 70.0f);
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "1.0"))
+	float AimTransitionSpeed = 14.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera|Recoil", meta = (ClampMin = "0.0"))
+	float RecoilPitchMin = 0.7f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera|Recoil", meta = (ClampMin = "0.0"))
+	float RecoilPitchMax = 1.2f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera|Recoil", meta = (ClampMin = "0.0"))
+	float RecoilYaw = 0.35f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera|Recoil", meta = (ClampMin = "0.1"))
+	float RecoilRecoverySpeed = 12.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera")
 	float CameraProbeSize = 12.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Movement")
@@ -106,6 +144,18 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Movement")
 	float JumpZVelocity = 600.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dodge", meta = (ClampMin = "100.0"))
+	float DodgeSpeed = 1200.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dodge", meta = (ClampMin = "0.05"))
+	float DodgeDuration = 0.45f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dodge", meta = (ClampMin = "0.0"))
+	float DodgeCooldown = 0.75f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Dodge", meta = (ClampMin = "0.1"))
+	float DodgeAnimationPlayRate = 1.35f;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Aiming")
 	float AimYaw = 0.0f;
@@ -126,6 +176,9 @@ protected:
 	TObjectPtr<UInputAction> JumpAction;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> DodgeAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> SprintAction;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
@@ -138,7 +191,13 @@ protected:
 	TObjectPtr<UInputAction> ReloadAction;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> FireModeAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	int32 InputMappingPriority = 0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input", meta = (ClampMin = "0.1", ClampMax = "0.5"))
+	float AimDoubleClickTime = 0.25f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
 	TObjectPtr<UAnimMontage> FireMontage;
@@ -149,16 +208,45 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
 	TObjectPtr<UAnimSequenceBase> AimLoopAnimation;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> DodgeAnimation;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Damage", meta = (ClampMin = "0.01"))
+	float DamageFlashDuration = 0.2f;
+
 private:
 	void ConfigureDefaultInput();
-	void ApplyCameraFOV();
+	void UpdateCamera(float DeltaTime);
+	void UpdateRecoil(float DeltaTime);
+	void ApplyRecoil();
+	void ApplyScopedVisibility();
 	void ApplyAimingState();
+	void StartDamageFlash();
+	void EndDamageFlash();
+	void SetDamageMaterialParameters(const FLinearColor& Color, float Strength);
 	void UpdateAimOffsets();
 	void ApplyAimAnimation();
+	void EndDodge();
+	void ResetDodgeCooldown();
 
 	UPROPERTY(Transient)
 	TObjectPtr<UAnimMontage> ActiveAimMontage;
 
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UMaterialInstanceDynamic>> DamageMaterials;
+
+	FVector CachedMoveDirection = FVector::ZeroVector;
+	float RecoilPitchOffset = 0.0f;
+	float RecoilYawOffset = 0.0f;
+	float DamageFlashAlpha = 0.0f;
+	float DefaultGroundFriction = 8.0f;
+	float DefaultBrakingDeceleration = 2000.0f;
+	FTimerHandle DodgeTimerHandle;
+	FTimerHandle DodgeCooldownTimerHandle;
+	FTimerHandle AimClickTimerHandle;
+	FTimerHandle DamageFlashTimerHandle;
+	bool bIsDodging = false;
+	bool bCanDodge = true;
 	bool bIsSprinting = false;
 	bool bIsAiming = false;
 	bool bIsScoped = false;

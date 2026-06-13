@@ -54,7 +54,19 @@ public:
 	float GetHealthPercent() const;
 
 	UFUNCTION(BlueprintPure, Category = "Health")
+	float GetCurrentHealth() const { return CurrentHealth; }
+
+	UFUNCTION(BlueprintPure, Category = "Health")
+	float GetMaxHealth() const { return MaxHealth; }
+
+	UFUNCTION(BlueprintPure, Category = "Health")
 	bool IsDead() const { return bIsDead; }
+
+	UFUNCTION(BlueprintCallable, Category = "Health")
+	void SetInvulnerable(bool bNewInvulnerable) { bIsInvulnerable = bNewInvulnerable; }
+
+	UFUNCTION(BlueprintPure, Category = "Health")
+	bool IsInvulnerable() const { return bIsInvulnerable; }
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Health", meta = (ClampMin = "1.0"))
 	float MaxHealth = 100.0f;
@@ -81,4 +93,7 @@ private:
 		AActor* DamageCauser);
 
 	bool bIsDead = false;
+
+	UPROPERTY(VisibleAnywhere, Category = "Health")
+	bool bIsInvulnerable = false;
 };

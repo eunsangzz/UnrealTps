@@ -22,7 +22,11 @@ void UWeaponComponent::StartFire()
 {
 	bWantsToFire = true;
 	FireOnce();
-	StartFireTimer();
+
+	if (bAutomaticFireMode)
+	{
+		StartFireTimer();
+	}
 }
 
 void UWeaponComponent::StopFire()
@@ -66,6 +70,16 @@ bool UWeaponComponent::CanFire() const
 	}
 
 	return World->GetTimeSeconds() - LastFireTime >= CurrentWeapon->GetFireInterval();
+}
+
+void UWeaponComponent::ToggleFireMode()
+{
+	bAutomaticFireMode = !bAutomaticFireMode;
+
+	if (!bAutomaticFireMode)
+	{
+		StopFire();
+	}
 }
 
 void UWeaponComponent::EquipDefaultWeapon()

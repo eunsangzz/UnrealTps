@@ -9,14 +9,18 @@
 #include "Animation/AnimSingleNodeInstance.h"
 #include "Animation/BlendSpace.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "DrawDebugHelpers.h"
 #include "NavigationSystem.h"
+#include "Navigation/PathFollowingComponent.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
 #include "../AI/TPSAIController.h"
 #include "../Components/HealthComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInstanceDynamic.h"
 
 AEnemyCharacter::AEnemyCharacter()
 {
@@ -28,8 +32,17 @@ AEnemyCharacter::AEnemyCharacter()
 	bUseControllerRotationYaw = false;
 	GetCharacterMovement()->bOrientRotationToMovement = true;
 	GetCharacterMovement()->RotationRate = FRotator(0.0f, 420.0f, 0.0f);
+	GetCharacterMovement()->MaxAcceleration = 2400.0f;
+	GetCharacterMovement()->BrakingDecelerationWalking = 800.0f;
 
 	HealthComponent = CreateDefaultSubobject<UHealthComponent>(TEXT("HealthComponent"));
+	DamageFlashLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("DamageFlashLight"));
+	DamageFlashLight->SetupAttachment(RootComponent);
+	DamageFlashLight->SetRelativeLocation(FVector(0.0f, 0.0f, 60.0f));
+	DamageFlashLight->SetLightColor(FLinearColor::Red);
+	DamageFlashLight->SetIntensity(5000.0f);
+	DamageFlashLight->SetAttenuationRadius(300.0f);
+	DamageFlashLight->SetVisibility(false);
 }
 
 void AEnemyCharacter::BeginPlay()
@@ -39,21 +52,50 @@ void AEnemyCharacter::BeginPlay()
 	SpawnLocation = GetActorLocation();
 	ConfigureForEnemyType();
 	GetCharacterMovement()->MaxWalkSpeed = PatrolSpeed;
+	SpawnDefaultController();
 	HealthComponent->OnDeath.AddDynamic(this, &AEnemyCharacter::HandleDeath);
 	HealthComponent->OnDamaged.AddDynamic(this, &AEnemyCharacter::HandleDamaged);
 	InitializeAnimation();
-	ChangeState(EEnemyState::Idle);
+	SelectPatrolDestination();
+	ChangeState(EEnemyState::Patrol);
 }
 
 void AEnemyCharacter::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
 
+	DrawDetectionRange();
+
 	if (CurrentState != EEnemyState::Dead)
 	{
 		UpdateStateMachine(DeltaTime);
 		UpdateLocomotionAnimation();
 	}
+}
+
+void AEnemyCharacter::DrawDetectionRange() const
+{
+	if (!bDrawDetectionRange || !GetWorld() || CurrentState == EEnemyState::Dead)
+	{
+		return;
+	}
+
+	const FVector EyeLocation = GetActorLocation() + FVector(0.0f, 0.0f, BaseEyeHeight);
+	const FColor DetectionColor = TargetActor ? FColor::Red : FColor::Yellow;
+
+	DrawDebugCone(
+		GetWorld(),
+		EyeLocation,
+		GetActorForwardVector(),
+		SightDistance,
+		FMath::DegreesToRadians(HorizontalSightAngle * 0.5f),
+		FMath::DegreesToRadians(VerticalSightAngle * 0.5f),
+		24,
+		DetectionColor,
+		false,
+		0.0f,
+		0,
+		2.0f);
 }
 
 void AEnemyCharacter::ConfigureForEnemyType()
@@ -69,7 +111,9 @@ void AEnemyCharacter::ConfigureForEnemyType()
 	}
 	else
 	{
-		SightDistance = FMath::Max(SightDistance, 1500.0f);
+		SightDistance = FMath::Max(SightDistance, 2000.0f);
+		HorizontalSightAngle = 110.0f;
+		VerticalSightAngle = 100.0f;
 		AttackRange = FMath::Max(AttackRange, 180.0f);
 	}
 }
@@ -80,10 +124,31 @@ void AEnemyCharacter::UpdateStateMachine(float DeltaTime)
 	{
 		TryAcquireTarget();
 	}
-	else if (!TargetActor || !CanSeeTarget(TargetActor))
+	else if (!TargetActor)
 	{
-		TargetActor = nullptr;
-		ChangeState(EEnemyState::Idle);
+		SelectPatrolDestination();
+		ChangeState(EEnemyState::Patrol);
+	}
+	else
+	{
+		const bool bCanSeeTarget = CanSeeTarget(TargetActor);
+		if (bCanSeeTarget)
+		{
+			LastKnownTargetLocation = TargetActor->GetActorLocation();
+			LastTargetSeenTime = GetWorld()->GetTimeSeconds();
+		}
+
+		const float LoseTargetDistance = SightDistance * LoseTargetDistanceMultiplier;
+		const bool bTargetTooFar = FVector::DistSquared2D(GetActorLocation(), TargetActor->GetActorLocation())
+			> FMath::Square(LoseTargetDistance);
+		const bool bMemoryExpired = GetWorld()->GetTimeSeconds() - LastTargetSeenTime > LoseSightGraceDuration;
+
+		if (bTargetTooFar || (!bCanSeeTarget && bMemoryExpired))
+		{
+			TargetActor = nullptr;
+			SelectPatrolDestination();
+			ChangeState(EEnemyState::Patrol);
+		}
 	}
 
 	switch (CurrentState)
@@ -119,13 +184,14 @@ void AEnemyCharacter::UpdatePatrol()
 {
 	if (FVector::DistSquared2D(GetActorLocation(), PatrolDestination) <= FMath::Square(PatrolAcceptanceRadius))
 	{
-		ChangeState(EEnemyState::Idle);
-		return;
+		SelectPatrolDestination();
 	}
 
-	if (AAIController* AIController = Cast<AAIController>(GetController()))
+	const bool bFollowingNavigationPath = RequestNavigationMove(PatrolDestination, PatrolAcceptanceRadius);
+
+	if (!bFollowingNavigationPath || GetVelocity().SizeSquared2D() < FMath::Square(PatrolSpeed * 0.35f))
 	{
-		AIController->MoveToLocation(PatrolDestination, PatrolAcceptanceRadius);
+		MoveDirectlyTo(PatrolDestination);
 	}
 }
 
@@ -143,10 +209,26 @@ void AEnemyCharacter::UpdateChase()
 		return;
 	}
 
+	const bool bHasCurrentSight = CanSeeTarget(TargetActor);
+	if (bHasCurrentSight)
+	{
+		LastKnownTargetLocation = TargetActor->GetActorLocation();
+		LastTargetSeenTime = GetWorld()->GetTimeSeconds();
+	}
+
+	const FVector ChaseDestination = bHasCurrentSight
+		? TargetActor->GetActorLocation()
+		: LastKnownTargetLocation;
+
+	const bool bFollowingNavigationPath = RequestNavigationMove(ChaseDestination, AttackRange * 0.8f);
 	if (AAIController* AIController = Cast<AAIController>(GetController()))
 	{
-		AIController->MoveToActor(TargetActor, AttackRange * 0.8f);
 		AIController->SetFocus(TargetActor);
+	}
+
+	if (!bFollowingNavigationPath || GetVelocity().SizeSquared2D() < FMath::Square(ChaseSpeed * 0.35f))
+	{
+		MoveDirectlyTo(ChaseDestination);
 	}
 }
 
@@ -197,10 +279,12 @@ void AEnemyCharacter::ChangeState(EEnemyState NewState)
 	else if (NewState == EEnemyState::Patrol)
 	{
 		GetCharacterMovement()->MaxWalkSpeed = PatrolSpeed;
+		LastMoveRequestDestination = FVector(FLT_MAX);
 	}
 	else if (NewState == EEnemyState::Chase)
 	{
 		GetCharacterMovement()->MaxWalkSpeed = ChaseSpeed;
+		LastMoveRequestDestination = FVector(FLT_MAX);
 	}
 
 	OnEnemyStateChanged.Broadcast(PreviousState, NewState);
@@ -208,15 +292,66 @@ void AEnemyCharacter::ChangeState(EEnemyState NewState)
 
 void AEnemyCharacter::SelectPatrolDestination()
 {
-	PatrolDestination = SpawnLocation;
+	const FVector PatrolCenter = GetActorLocation();
+	const float PatrolAngle = FMath::FRandRange(0.0f, 2.0f * UE_PI);
+	const float PatrolDistance = FMath::FRandRange(PatrolRadius * 0.5f, PatrolRadius);
+	const FVector RandomOffset(
+		FMath::Cos(PatrolAngle) * PatrolDistance,
+		FMath::Sin(PatrolAngle) * PatrolDistance,
+		0.0f);
+	PatrolDestination = PatrolCenter + RandomOffset;
 
 	if (UNavigationSystemV1* NavigationSystem = UNavigationSystemV1::GetCurrent(GetWorld()))
 	{
 		FNavLocation NavLocation;
-		if (NavigationSystem->GetRandomReachablePointInRadius(SpawnLocation, PatrolRadius, NavLocation))
+		if (NavigationSystem->GetRandomReachablePointInRadius(PatrolCenter, PatrolRadius, NavLocation))
 		{
 			PatrolDestination = NavLocation.Location;
 		}
+	}
+}
+
+bool AEnemyCharacter::RequestNavigationMove(const FVector& Destination, float AcceptanceRadius)
+{
+	AAIController* AIController = Cast<AAIController>(GetController());
+	if (!AIController)
+	{
+		return false;
+	}
+
+	const bool bDestinationChanged =
+		FVector::DistSquared2D(LastMoveRequestDestination, Destination) > FMath::Square(100.0f);
+	const UPathFollowingComponent* PathFollowing = AIController->GetPathFollowingComponent();
+	const bool bMoveInactive = !PathFollowing || PathFollowing->GetStatus() == EPathFollowingStatus::Idle;
+
+	if (!bDestinationChanged && !bMoveInactive)
+	{
+		return true;
+	}
+
+	LastMoveRequestDestination = Destination;
+	const EPathFollowingRequestResult::Type MoveResult =
+		AIController->MoveToLocation(
+			Destination,
+			AcceptanceRadius,
+			true,
+			true,
+			true,
+			false,
+			nullptr,
+			true);
+
+	return MoveResult != EPathFollowingRequestResult::Failed;
+}
+
+void AEnemyCharacter::MoveDirectlyTo(const FVector& Destination)
+{
+	FVector MoveDirection = Destination - GetActorLocation();
+	MoveDirection.Z = 0.0f;
+
+	if (!MoveDirection.IsNearlyZero())
+	{
+		AddMovementInput(MoveDirection.GetSafeNormal());
 	}
 }
 
@@ -247,6 +382,8 @@ bool AEnemyCharacter::TryAcquireTarget()
 	}
 
 	TargetActor = PlayerPawn;
+	LastKnownTargetLocation = PlayerPawn->GetActorLocation();
+	LastTargetSeenTime = GetWorld()->GetTimeSeconds();
 	ChangeState(IsTargetInAttackRange() ? EEnemyState::Attack : EEnemyState::Chase);
 	return true;
 }
@@ -322,7 +459,75 @@ void AEnemyCharacter::HandleDamaged(UHealthComponent* Component, float DamageAmo
 {
 	if (CurrentState != EEnemyState::Dead)
 	{
+		AActor* Aggressor = InstigatedBy ? InstigatedBy->GetPawn() : DamageCauser;
+		if (Aggressor)
+		{
+			TargetActor = Aggressor;
+			LastKnownTargetLocation = Aggressor->GetActorLocation();
+			LastTargetSeenTime = GetWorld()->GetTimeSeconds();
+			ChangeState(IsTargetInAttackRange() ? EEnemyState::Attack : EEnemyState::Chase);
+		}
+
+		StartDamageFlash();
 		PlayHitAnimation();
+	}
+}
+
+void AEnemyCharacter::StartDamageFlash()
+{
+	SetDamageMaterialParameters(FLinearColor::Red, 1.0f);
+	DamageFlashLight->SetVisibility(true);
+	GetWorldTimerManager().SetTimer(
+		DamageFlashTimerHandle,
+		this,
+		&AEnemyCharacter::EndDamageFlash,
+		DamageFlashDuration,
+		false);
+}
+
+void AEnemyCharacter::EndDamageFlash()
+{
+	SetDamageMaterialParameters(FLinearColor::White, 0.0f);
+	DamageFlashLight->SetVisibility(false);
+}
+
+void AEnemyCharacter::SetDamageMaterialParameters(const FLinearColor& Color, float Strength)
+{
+	USkeletalMeshComponent* EnemyMesh = GetMesh();
+	if (!EnemyMesh)
+	{
+		return;
+	}
+
+	if (DamageMaterials.IsEmpty())
+	{
+		for (int32 MaterialIndex = 0; MaterialIndex < EnemyMesh->GetNumMaterials(); ++MaterialIndex)
+		{
+			if (UMaterialInstanceDynamic* Material = EnemyMesh->CreateAndSetMaterialInstanceDynamic(MaterialIndex))
+			{
+				DamageMaterials.Add(Material);
+			}
+		}
+	}
+
+	for (UMaterialInstanceDynamic* Material : DamageMaterials)
+	{
+		if (!Material)
+		{
+			continue;
+		}
+
+		if (Strength <= 0.0f)
+		{
+			Material->ClearParameterValues();
+			continue;
+		}
+
+		Material->SetVectorParameterValue(TEXT("DamageColor"), Color);
+		Material->SetVectorParameterValue(TEXT("TintColor"), Color);
+		Material->SetVectorParameterValue(TEXT("Color"), Color);
+		Material->SetScalarParameterValue(TEXT("DamageAmount"), Strength);
+		Material->SetScalarParameterValue(TEXT("HitFlash"), Strength);
 	}
 }
 

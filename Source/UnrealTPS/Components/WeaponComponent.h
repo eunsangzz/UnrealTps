@@ -33,6 +33,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Weapon")
 	bool CanFire() const;
 
+	UFUNCTION(BlueprintCallable, Category = "Weapon")
+	void ToggleFireMode();
+
+	UFUNCTION(BlueprintPure, Category = "Weapon")
+	bool IsAutomaticFireMode() const { return bAutomaticFireMode; }
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weapon")
 	TObjectPtr<AWeaponBase> CurrentWeapon;
 
@@ -56,5 +62,6 @@ private:
 	FTimerHandle FireTimerHandle;
 	bool bWantsToFire = false;
 	bool bIsReloading = false;
+	bool bAutomaticFireMode = true;
 	double LastFireTime = -1000.0;
 };
