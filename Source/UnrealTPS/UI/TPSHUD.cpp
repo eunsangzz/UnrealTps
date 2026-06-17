@@ -5,11 +5,10 @@
 #include "CanvasItem.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
-#include "EngineUtils.h"
 #include "../Character/TPSCharacter.h"
 #include "../Components/HealthComponent.h"
 #include "../Components/WeaponComponent.h"
-#include "../Enemy/EnemyCharacter.h"
+#include "../TPSGameMode.h"
 #include "../Weapon/WeaponBase.h"
 
 void ATPSHUD::DrawHUD()
@@ -69,6 +68,20 @@ void ATPSHUD::DrawHUD()
 	DrawPlayerStatus(TPSCharacter, UIScale);
 	DrawWeaponStatus(TPSCharacter, UIScale);
 	DrawRemainingEnemies(UIScale);
+
+	const ATPSGameMode* GameMode = GetWorld()->GetAuthGameMode<ATPSGameMode>();
+	if (GameMode && GameMode->GetCombatState() == ETPSCombatState::Preparing && GameMode->GetCurrentWave() > 0)
+	{
+		DrawWaveClear(UIScale, GameMode->GetCurrentWave());
+	}
+	else if (GameMode && GameMode->GetCombatState() == ETPSCombatState::Victory)
+	{
+		DrawCombatResult(UIScale, true);
+	}
+	else if (GameMode && GameMode->GetCombatState() == ETPSCombatState::Defeat)
+	{
+		DrawCombatResult(UIScale, false);
+	}
 }
 
 void ATPSHUD::DrawPlayerStatus(const ATPSCharacter* Character, float Scale)
@@ -141,23 +154,90 @@ void ATPSHUD::DrawRemainingEnemies(float Scale)
 		return;
 	}
 
-	int32 RemainingEnemies = 0;
-	for (TActorIterator<AEnemyCharacter> It(GetWorld()); It; ++It)
-	{
-		if (It->GetEnemyState() != EEnemyState::Dead)
-		{
-			++RemainingEnemies;
-		}
-	}
+	const ATPSGameMode* GameMode = GetWorld()->GetAuthGameMode<ATPSGameMode>();
+	const int32 RemainingEnemies = GameMode ? GameMode->GetRemainingEnemyCount() : 0;
+	const int32 CurrentWave = GameMode ? GameMode->GetCurrentWave() : 0;
 
 	const FVector2D Size(200.0f, 72.0f);
 	const FVector2D Position(Canvas->ClipX - Size.X * Scale - 42.0f * Scale, 38.0f * Scale);
 	DrawPanel(Position, Size * Scale, FLinearColor(0.015f, 0.02f, 0.025f, 0.8f));
-	DrawLabel(TEXT("ENEMIES ALIVE"), Position + FVector2D(16.0f, 10.0f) * Scale, GEngine->GetTinyFont(), AccentColor, Scale);
+	DrawLabel(
+		FString::Printf(TEXT("WAVE %d  ENEMIES ALIVE"), CurrentWave),
+		Position + FVector2D(16.0f, 10.0f) * Scale,
+		GEngine->GetTinyFont(),
+		AccentColor,
+		Scale);
 	DrawLabel(
 		FString::Printf(TEXT("%d"), RemainingEnemies),
 		Position + FVector2D(16.0f, 27.0f) * Scale,
 		GEngine->GetLargeFont(),
+		FLinearColor::White,
+		Scale);
+}
+
+void ATPSHUD::DrawWaveClear(float Scale, int32 ClearedWave)
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	const FString WaveClearText = FString::Printf(TEXT("WAVE %d CLEAR"), ClearedWave);
+	float TextWidth = 0.0f;
+	float TextHeight = 0.0f;
+	Canvas->StrLen(GEngine->GetLargeFont(), WaveClearText, TextWidth, TextHeight);
+
+	DrawLabel(
+		WaveClearText,
+		FVector2D(
+			(Canvas->ClipX - TextWidth * Scale * 1.25f) * 0.5f,
+			Canvas->ClipY * 0.3f),
+		GEngine->GetLargeFont(),
+		AccentColor,
+		Scale * 1.25f);
+}
+
+void ATPSHUD::DrawCombatResult(float Scale, bool bVictory)
+{
+	if (!GEngine)
+	{
+		return;
+	}
+
+	const FLinearColor ResultColor = bVictory
+		? FLinearColor(0.12f, 0.9f, 0.42f, 1.0f)
+		: FLinearColor(0.95f, 0.08f, 0.04f, 1.0f);
+	FCanvasTileItem Overlay(
+		FVector2D::ZeroVector,
+		FVector2D(Canvas->ClipX, Canvas->ClipY),
+		bVictory
+			? FLinearColor(0.0f, 0.12f, 0.04f, 0.52f)
+			: FLinearColor(0.12f, 0.0f, 0.0f, 0.52f));
+	Overlay.BlendMode = SE_BLEND_Translucent;
+	Canvas->DrawItem(Overlay);
+
+	const FString ResultText = bVictory ? TEXT("AREA CLEAR") : TEXT("YOU DIED");
+	float TextWidth = 0.0f;
+	float TextHeight = 0.0f;
+	Canvas->StrLen(GEngine->GetLargeFont(), ResultText, TextWidth, TextHeight);
+
+	DrawLabel(
+		ResultText,
+		FVector2D(
+			(Canvas->ClipX - TextWidth * Scale * 1.6f) * 0.5f,
+			Canvas->ClipY * 0.38f),
+		GEngine->GetLargeFont(),
+		ResultColor,
+		Scale * 1.6f);
+
+	const FString RestartText = TEXT("PRESS ENTER TO RESTART");
+	Canvas->StrLen(GEngine->GetMediumFont(), RestartText, TextWidth, TextHeight);
+	DrawLabel(
+		RestartText,
+		FVector2D(
+			(Canvas->ClipX - TextWidth * Scale) * 0.5f,
+			Canvas->ClipY * 0.52f),
+		GEngine->GetMediumFont(),
 		FLinearColor::White,
 		Scale);
 }

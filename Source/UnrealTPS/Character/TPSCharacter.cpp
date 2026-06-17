@@ -10,6 +10,7 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimSequenceBase.h"
+#include "Animation/AnimSingleNodeInstance.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -23,6 +24,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "../Components/HealthComponent.h"
 #include "../Components/WeaponComponent.h"
+#include "../TPSGameMode.h"
 #include "../Weapon/WeaponBase.h"
 
 ATPSCharacter::ATPSCharacter()
@@ -52,16 +54,21 @@ ATPSCharacter::ATPSCharacter()
 		GetMesh()->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
 	}
 
-	static ConstructorHelpers::FClassFinder<UAnimInstance> BelicaAnimBlueprint(
-		TEXT("/Game/ParagonLtBelica/Characters/Heroes/Belica/LtBelica_AnimBlueprint"));
-	if (BelicaAnimBlueprint.Succeeded())
-	{
-		GetMesh()->SetAnimInstanceClass(BelicaAnimBlueprint.Class);
-	}
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> BelicaIdleAnimation(
+		TEXT("/Game/ParagonLtBelica/Characters/Heroes/Belica/Animations/HeroSelect_Idle.HeroSelect_Idle"));
+	IdleAnimation = BelicaIdleAnimation.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> BelicaMoveAnimation(
+		TEXT("/Game/ParagonLtBelica/Characters/Heroes/Belica/Animations/Jog_Fwd.Jog_Fwd"));
+	MoveAnimation = BelicaMoveAnimation.Object;
 
 	static ConstructorHelpers::FObjectFinder<UAnimMontage> BelicaFireMontage(
 		TEXT("/Game/ParagonLtBelica/Characters/Heroes/Belica/Animations/Primary_Fire_Med_Montage.Primary_Fire_Med_Montage"));
 	FireMontage = BelicaFireMontage.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> BelicaFireAnimation(
+		TEXT("/Game/ParagonLtBelica/Characters/Heroes/Belica/Animations/Primary_Fire_Med.Primary_Fire_Med"));
+	FireAnimation = BelicaFireAnimation.Object;
 
 	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> BelicaReloadAnimation(
 		TEXT("/Game/ParagonLtBelica/Characters/Heroes/Belica/Animations/Q_Ability.Q_Ability"));
@@ -74,6 +81,10 @@ ATPSCharacter::ATPSCharacter()
 	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> BelicaDodgeAnimation(
 		TEXT("/Game/ParagonLtBelica/Characters/Heroes/Belica/Animations/E_Ability.E_Ability"));
 	DodgeAnimation = BelicaDodgeAnimation.Object;
+
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> BelicaDeathAnimation(
+		TEXT("/Game/ParagonLtBelica/Characters/Heroes/Belica/Animations/Death_A.Death_A"));
+	DeathAnimation = BelicaDeathAnimation.Object;
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);
@@ -112,6 +123,7 @@ void ATPSCharacter::Tick(float DeltaTime)
 	UpdateCamera(DeltaTime);
 	UpdateRecoil(DeltaTime);
 	UpdateAimOffsets();
+	UpdateLocomotionAnimation();
 
 	if (bIsAiming)
 	{
@@ -128,6 +140,8 @@ void ATPSCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
+	RestoreLocomotionAnimation();
+
 	if (WeaponComponent)
 	{
 		WeaponComponent->OnWeaponFired.AddDynamic(this, &ATPSCharacter::HandleWeaponFired);
@@ -137,6 +151,7 @@ void ATPSCharacter::BeginPlay()
 	if (HealthComponent)
 	{
 		HealthComponent->OnDamaged.AddDynamic(this, &ATPSCharacter::HandleDamaged);
+		HealthComponent->OnDeath.AddDynamic(this, &ATPSCharacter::HandleDeath);
 	}
 
 	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
@@ -170,13 +185,14 @@ void ATPSCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 	EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Completed, this, &ATPSCharacter::StopFire);
 	EnhancedInputComponent->BindAction(FireModeAction, ETriggerEvent::Started, this, &ATPSCharacter::ToggleFireMode);
 	EnhancedInputComponent->BindAction(ReloadAction, ETriggerEvent::Started, this, &ATPSCharacter::Reload);
+	EnhancedInputComponent->BindAction(RestartAction, ETriggerEvent::Started, this, &ATPSCharacter::RestartCombat);
 }
 
 void ATPSCharacter::Move(const FInputActionValue& Value)
 {
 	const FVector2D MovementVector = Value.Get<FVector2D>();
 
-	if (!Controller || MovementVector.IsNearlyZero())
+	if (!bCombatActive || IsDead() || !Controller || MovementVector.IsNearlyZero())
 	{
 		return;
 	}
@@ -207,7 +223,7 @@ void ATPSCharacter::Look(const FInputActionValue& Value)
 {
 	const FVector2D LookAxisVector = Value.Get<FVector2D>();
 
-	if (!Controller || LookAxisVector.IsNearlyZero())
+	if (!bCombatActive || IsDead() || !Controller || LookAxisVector.IsNearlyZero())
 	{
 		return;
 	}
@@ -219,7 +235,7 @@ void ATPSCharacter::Look(const FInputActionValue& Value)
 void ATPSCharacter::Dodge()
 {
 	UCharacterMovementComponent* Movement = GetCharacterMovement();
-	if (!bCanDodge || bIsDodging || !Movement || !Movement->IsMovingOnGround()
+	if (!bCombatActive || !bCanDodge || bIsDodging || !Movement || !Movement->IsMovingOnGround()
 		|| (HealthComponent && HealthComponent->IsDead()))
 	{
 		return;
@@ -250,9 +266,10 @@ void ATPSCharacter::Dodge()
 		HealthComponent->SetInvulnerable(true);
 	}
 
+	bool bPlayedDodgeAnimation = false;
 	if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
 	{
-		if (DodgeAnimation)
+		if (DodgeAnimation && !GetMesh()->GetSingleNodeInstance())
 		{
 			AnimInstance->StopAllMontages(0.1f);
 			AnimInstance->PlaySlotAnimationAsDynamicMontage(
@@ -261,7 +278,13 @@ void ATPSCharacter::Dodge()
 				0.05f,
 				0.1f,
 				DodgeAnimationPlayRate);
+			bPlayedDodgeAnimation = true;
 		}
+	}
+
+	if (!bPlayedDodgeAnimation)
+	{
+		PlayCharacterAnimation(DodgeAnimation, true, DodgeAnimationPlayRate);
 	}
 
 	GetWorldTimerManager().SetTimer(
@@ -280,6 +303,11 @@ void ATPSCharacter::Dodge()
 
 void ATPSCharacter::StartSprint()
 {
+	if (!bCombatActive || IsDead())
+	{
+		return;
+	}
+
 	bIsSprinting = true;
 
 	if (!bIsAiming && !bIsDodging)
@@ -300,6 +328,11 @@ void ATPSCharacter::StopSprint()
 
 void ATPSCharacter::HandleAimClick()
 {
+	if (!bCombatActive || IsDead())
+	{
+		return;
+	}
+
 	if (GetWorldTimerManager().IsTimerActive(AimClickTimerHandle))
 	{
 		GetWorldTimerManager().ClearTimer(AimClickTimerHandle);
@@ -325,6 +358,11 @@ void ATPSCharacter::HandleAimClick()
 
 void ATPSCharacter::ResolveSingleAimClick()
 {
+	if (!bCombatActive || IsDead())
+	{
+		return;
+	}
+
 	if (bIsAiming)
 	{
 		SetAiming(false);
@@ -337,7 +375,7 @@ void ATPSCharacter::ResolveSingleAimClick()
 
 void ATPSCharacter::StartFire()
 {
-	if (WeaponComponent)
+	if (bCombatActive && !IsDead() && WeaponComponent)
 	{
 		WeaponComponent->StartFire();
 	}
@@ -353,7 +391,7 @@ void ATPSCharacter::StopFire()
 
 void ATPSCharacter::ToggleFireMode()
 {
-	if (WeaponComponent)
+	if (bCombatActive && !IsDead() && WeaponComponent)
 	{
 		WeaponComponent->ToggleFireMode();
 	}
@@ -361,9 +399,17 @@ void ATPSCharacter::ToggleFireMode()
 
 void ATPSCharacter::Reload()
 {
-	if (WeaponComponent)
+	if (bCombatActive && !IsDead() && WeaponComponent)
 	{
 		WeaponComponent->Reload();
+	}
+}
+
+void ATPSCharacter::RestartCombat()
+{
+	if (ATPSGameMode* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ATPSGameMode>() : nullptr)
+	{
+		GameMode->RestartCombat();
 	}
 }
 
@@ -373,11 +419,14 @@ void ATPSCharacter::HandleWeaponFired()
 
 	if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
 	{
-		if (FireMontage)
+		if (FireMontage && !GetMesh()->GetSingleNodeInstance())
 		{
 			AnimInstance->Montage_Play(FireMontage);
+			return;
 		}
 	}
+
+	PlayCharacterAnimation(FireAnimation, true);
 }
 
 void ATPSCharacter::HandleDamaged(
@@ -389,28 +438,122 @@ void ATPSCharacter::HandleDamaged(
 	StartDamageFlash();
 }
 
+void ATPSCharacter::HandleDeath(
+	UHealthComponent* Component,
+	AController* InstigatedBy,
+	AActor* DamageCauser)
+{
+	GetWorldTimerManager().ClearTimer(DodgeTimerHandle);
+	GetWorldTimerManager().ClearTimer(DodgeCooldownTimerHandle);
+	GetWorldTimerManager().ClearTimer(AimClickTimerHandle);
+	GetWorldTimerManager().ClearTimer(DamageFlashTimerHandle);
+	GetWorldTimerManager().ClearTimer(AnimationTimerHandle);
+
+	StopFire();
+	bIsDodging = false;
+	bCanDodge = false;
+	bIsSprinting = false;
+	bIsAiming = false;
+	bIsScoped = false;
+	ActiveAimMontage = nullptr;
+
+	ApplyScopedVisibility();
+	EndDamageFlash();
+
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->StopMovementImmediately();
+		Movement->DisableMovement();
+	}
+
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PlayDeathAnimation();
+
+	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
+	{
+		PlayerController->SetIgnoreMoveInput(true);
+		PlayerController->SetIgnoreLookInput(true);
+	}
+
+	if (CameraBoom && FollowCamera)
+	{
+		CameraBoom->TargetArmLength = CameraArmLength;
+		CameraBoom->SocketOffset = ShoulderOffset;
+		FollowCamera->SetFieldOfView(DefaultFOV);
+	}
+}
+
 void ATPSCharacter::HandleWeaponReloaded()
 {
 	if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
 	{
-		if (ReloadAnimation)
+		if (ReloadAnimation && !GetMesh()->GetSingleNodeInstance())
 		{
 			AnimInstance->PlaySlotAnimationAsDynamicMontage(
 				ReloadAnimation,
 				TEXT("DefaultSlot"),
 				0.15f,
 				0.2f);
+			return;
 		}
 	}
+
+	PlayCharacterAnimation(ReloadAnimation, true);
 }
 
 void ATPSCharacter::Jump()
 {
+	if (!bCombatActive || IsDead())
+	{
+		return;
+	}
+
 	Super::Jump();
+}
+
+bool ATPSCharacter::IsDead() const
+{
+	return HealthComponent && HealthComponent->IsDead();
+}
+
+void ATPSCharacter::HandleCombatEnded()
+{
+	GetWorldTimerManager().ClearTimer(DodgeTimerHandle);
+	GetWorldTimerManager().ClearTimer(DodgeCooldownTimerHandle);
+	GetWorldTimerManager().ClearTimer(AimClickTimerHandle);
+	GetWorldTimerManager().ClearTimer(AnimationTimerHandle);
+	StopFire();
+	bIsDodging = false;
+	bIsSprinting = false;
+
+	if (!IsDead())
+	{
+		SetAiming(false);
+	}
+
+	bCombatActive = false;
+	bCanDodge = false;
+
+	if (UCharacterMovementComponent* Movement = GetCharacterMovement())
+	{
+		Movement->StopMovementImmediately();
+		Movement->DisableMovement();
+	}
+
+	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
+	{
+		PlayerController->SetIgnoreMoveInput(true);
+		PlayerController->SetIgnoreLookInput(true);
+	}
 }
 
 void ATPSCharacter::SetAiming(bool bNewAiming)
 {
+	if (!bCombatActive || IsDead())
+	{
+		return;
+	}
+
 	bIsAiming = bNewAiming;
 
 	if (!bIsAiming)
@@ -425,6 +568,11 @@ void ATPSCharacter::SetAiming(bool bNewAiming)
 
 void ATPSCharacter::SetScoped(bool bNewScoped)
 {
+	if (!bCombatActive || IsDead())
+	{
+		return;
+	}
+
 	bIsScoped = bNewScoped;
 
 	if (bIsScoped)
@@ -467,6 +615,9 @@ void ATPSCharacter::ConfigureDefaultInput()
 	FireModeAction = CreateDefaultSubobject<UInputAction>(TEXT("IA_FireMode"));
 	FireModeAction->ValueType = EInputActionValueType::Boolean;
 
+	RestartAction = CreateDefaultSubobject<UInputAction>(TEXT("IA_Restart"));
+	RestartAction->ValueType = EInputActionValueType::Boolean;
+
 	DefaultMappingContext = CreateDefaultSubobject<UInputMappingContext>(TEXT("IMC_Default"));
 
 	UInputModifierSwizzleAxis* MoveSwizzle = CreateDefaultSubobject<UInputModifierSwizzleAxis>(TEXT("MoveSwizzle"));
@@ -500,6 +651,7 @@ void ATPSCharacter::ConfigureDefaultInput()
 	DefaultMappingContext->MapKey(FireAction, EKeys::LeftMouseButton);
 	DefaultMappingContext->MapKey(FireModeAction, EKeys::B);
 	DefaultMappingContext->MapKey(ReloadAction, EKeys::R);
+	DefaultMappingContext->MapKey(RestartAction, EKeys::Enter);
 }
 
 void ATPSCharacter::UpdateCamera(float DeltaTime)
@@ -623,6 +775,89 @@ void ATPSCharacter::SetDamageMaterialParameters(const FLinearColor& Color, float
 		Material->SetScalarParameterValue(TEXT("DamageAmount"), Strength);
 		Material->SetScalarParameterValue(TEXT("HitFlash"), Strength);
 	}
+}
+
+void ATPSCharacter::PlayDeathAnimation()
+{
+	if (!DeathAnimation)
+	{
+		return;
+	}
+
+	if (GetMesh()->GetSingleNodeInstance())
+	{
+		PlayCharacterAnimation(DeathAnimation, false);
+		return;
+	}
+
+	if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+	{
+		AnimInstance->StopAllMontages(0.05f);
+		AnimInstance->PlaySlotAnimationAsDynamicMontage(
+			DeathAnimation,
+			TEXT("DefaultSlot"),
+			0.05f,
+			0.2f);
+	}
+}
+
+void ATPSCharacter::PlayCharacterAnimation(UAnimationAsset* Animation, bool bRestoreLocomotion, float PlayRate)
+{
+	if (!Animation)
+	{
+		return;
+	}
+
+	bPlayingActionAnimation = true;
+	GetWorldTimerManager().ClearTimer(AnimationTimerHandle);
+	GetMesh()->PlayAnimation(Animation, false);
+
+	if (UAnimSingleNodeInstance* SingleNodeInstance = GetMesh()->GetSingleNodeInstance())
+	{
+		SingleNodeInstance->SetPlayRate(PlayRate);
+	}
+
+	if (bRestoreLocomotion)
+	{
+		GetWorldTimerManager().SetTimer(
+			AnimationTimerHandle,
+			this,
+			&ATPSCharacter::RestoreLocomotionAnimation,
+			FMath::Max(0.1f, Animation->GetPlayLength()),
+			false);
+	}
+}
+
+void ATPSCharacter::RestoreLocomotionAnimation()
+{
+	bPlayingActionAnimation = false;
+	UpdateLocomotionAnimation();
+}
+
+void ATPSCharacter::UpdateLocomotionAnimation()
+{
+	if (bPlayingActionAnimation || IsDead())
+	{
+		return;
+	}
+
+	UAnimationAsset* DesiredAnimation = GetVelocity().SizeSquared2D() > FMath::Square(5.0f)
+		? MoveAnimation.Get()
+		: IdleAnimation.Get();
+	if (!DesiredAnimation)
+	{
+		return;
+	}
+
+	if (UAnimSingleNodeInstance* SingleNodeInstance = GetMesh()->GetSingleNodeInstance())
+	{
+		if (SingleNodeInstance->GetAnimationAsset() == DesiredAnimation)
+		{
+			return;
+		}
+	}
+
+	GetMesh()->PlayAnimation(DesiredAnimation, true);
 }
 
 void ATPSCharacter::ApplyScopedVisibility()

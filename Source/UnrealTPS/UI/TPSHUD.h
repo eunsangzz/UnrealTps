@@ -18,6 +18,8 @@ protected:
 	void DrawPlayerStatus(const class ATPSCharacter* Character, float Scale);
 	void DrawWeaponStatus(const class ATPSCharacter* Character, float Scale);
 	void DrawRemainingEnemies(float Scale);
+	void DrawWaveClear(float Scale, int32 ClearedWave);
+	void DrawCombatResult(float Scale, bool bVictory);
 	void DrawPanel(const FVector2D& Position, const FVector2D& Size, const FLinearColor& Color);
 	void DrawLabel(const FString& Text, const FVector2D& Position, class UFont* Font, const FLinearColor& Color, float Scale);
 

@@ -349,9 +349,24 @@ void AEnemyCharacter::MoveDirectlyTo(const FVector& Destination)
 	FVector MoveDirection = Destination - GetActorLocation();
 	MoveDirection.Z = 0.0f;
 
-	if (!MoveDirection.IsNearlyZero())
+	if (MoveDirection.IsNearlyZero())
 	{
-		AddMovementInput(MoveDirection.GetSafeNormal());
+		return;
+	}
+
+	const FVector NormalizedDirection = MoveDirection.GetSafeNormal();
+	const float DesiredSpeed = CurrentState == EEnemyState::Chase ? ChaseSpeed : PatrolSpeed;
+	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
+	MovementComponent->MaxWalkSpeed = DesiredSpeed;
+
+	AddMovementInput(NormalizedDirection);
+
+	// Some navigation layouts accept a move request without producing useful velocity.
+	const float SpeedAlongDirection = FVector::DotProduct(MovementComponent->Velocity, NormalizedDirection);
+	if (SpeedAlongDirection < DesiredSpeed * 0.8f)
+	{
+		MovementComponent->Velocity.X = NormalizedDirection.X * DesiredSpeed;
+		MovementComponent->Velocity.Y = NormalizedDirection.Y * DesiredSpeed;
 	}
 }
 
@@ -453,6 +468,11 @@ void AEnemyCharacter::HandleDeath(UHealthComponent* Component, AController* Inst
 
 	GetCharacterMovement()->DisableMovement();
 	SetActorEnableCollision(false);
+
+	if (CorpseLifetime > 0.0f)
+	{
+		SetLifeSpan(CorpseLifetime);
+	}
 }
 
 void AEnemyCharacter::HandleDamaged(UHealthComponent* Component, float DamageAmount, AController* InstigatedBy, AActor* DamageCauser)
@@ -533,13 +553,14 @@ void AEnemyCharacter::SetDamageMaterialParameters(const FLinearColor& Color, flo
 
 void AEnemyCharacter::InitializeAnimation()
 {
-	if (!bUseSingleNodeLocomotion || !LocomotionBlendSpace)
+	if (!bUseSingleNodeLocomotion || (!LocomotionBlendSpace && !LocomotionAnimation))
 	{
 		return;
 	}
 
 	GetMesh()->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-	GetMesh()->PlayAnimation(LocomotionBlendSpace, true);
+	UAnimationAsset* Animation = LocomotionBlendSpace ? Cast<UAnimationAsset>(LocomotionBlendSpace) : LocomotionAnimation.Get();
+	GetMesh()->PlayAnimation(Animation, true);
 }
 
 void AEnemyCharacter::UpdateLocomotionAnimation()
@@ -549,10 +570,35 @@ void AEnemyCharacter::UpdateLocomotionAnimation()
 		return;
 	}
 
+	if (!LocomotionBlendSpace)
+	{
+		if (LocomotionAnimation)
+		{
+			GetMesh()->PlayAnimation(LocomotionAnimation, true);
+		}
+		return;
+	}
+
 	if (UAnimSingleNodeInstance* SingleNodeInstance = GetMesh()->GetSingleNodeInstance())
 	{
 		const float Speed = GetVelocity().Size2D();
-		SingleNodeInstance->SetBlendSpacePosition(FVector(Speed, 0.0f, 0.0f));
+		const float DesiredSpeed = CurrentState == EEnemyState::Chase ? ChaseSpeed : PatrolSpeed;
+		const FBlendParameter& SpeedParameter = LocomotionBlendSpace->GetBlendParameter(0);
+		const float NormalizedSpeed = DesiredSpeed > KINDA_SMALL_NUMBER
+			? FMath::Clamp(Speed / DesiredSpeed, 0.0f, 1.0f)
+			: 0.0f;
+		const float BlendInput = FMath::Lerp(SpeedParameter.Min, SpeedParameter.Max, NormalizedSpeed);
+
+		SingleNodeInstance->SetBlendSpacePosition(FVector(BlendInput, 0.0f, 0.0f));
+		SingleNodeInstance->SetPlaying(true);
+
+		const float PlayRate = Speed > 5.0f
+			? FMath::GetMappedRangeValueClamped(
+				FVector2D(0.0f, FMath::Max(DesiredSpeed, 1.0f)),
+				FVector2D(0.9f, 1.25f),
+				Speed)
+			: 1.0f;
+		SingleNodeInstance->SetPlayRate(PlayRate);
 	}
 }
 
@@ -627,13 +673,14 @@ void AEnemyCharacter::PlayActionAnimation(UAnimSequenceBase* Animation, bool bRe
 
 void AEnemyCharacter::RestoreLocomotionAnimation()
 {
-	if (CurrentState == EEnemyState::Dead || !LocomotionBlendSpace)
+	if (CurrentState == EEnemyState::Dead || (!LocomotionBlendSpace && !LocomotionAnimation))
 	{
 		return;
 	}
 
 	bPlayingActionAnimation = false;
-	GetMesh()->PlayAnimation(LocomotionBlendSpace, true);
+	UAnimationAsset* Animation = LocomotionBlendSpace ? Cast<UAnimationAsset>(LocomotionBlendSpace) : LocomotionAnimation.Get();
+	GetMesh()->PlayAnimation(Animation, true);
 }
 
 AMeleeEnemyCharacter::AMeleeEnemyCharacter()
@@ -672,6 +719,7 @@ AMeleeEnemyCharacter::AMeleeEnemyCharacter()
 ARangedEnemyCharacter::ARangedEnemyCharacter()
 {
 	EnemyType = EEnemyType::Ranged;
+	bUseSingleNodeLocomotion = true;
 
 	GetCapsuleComponent()->InitCapsuleSize(42.0f, 96.0f);
 
@@ -684,16 +732,13 @@ ARangedEnemyCharacter::ARangedEnemyCharacter()
 		GetMesh()->SetRelativeRotation(FRotator(0.0f, -90.0f, 0.0f));
 	}
 
-	static ConstructorHelpers::FClassFinder<UAnimInstance> WraithAnimBlueprint(
-		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Wraith_AnimBlueprint"));
-	if (WraithAnimBlueprint.Succeeded())
-	{
-		GetMesh()->SetAnimInstanceClass(WraithAnimBlueprint.Class);
-	}
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> WraithLocomotion(
+		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Animations/Locomotion_Combat/Idle_Combat.Idle_Combat"));
+	LocomotionAnimation = WraithLocomotion.Object;
 
-	static ConstructorHelpers::FObjectFinder<UAnimMontage> WraithAttack(
-		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Animations/Fire_A_Slow_Montage.Fire_A_Slow_Montage"));
-	AttackMontage = WraithAttack.Object;
+	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> WraithAttack(
+		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Animations/Fire_A_Slow.Fire_A_Slow"));
+	AttackAnimation = WraithAttack.Object;
 
 	static ConstructorHelpers::FObjectFinder<UAnimSequenceBase> WraithHit(
 		TEXT("/Game/ParagonWraith/Characters/Heroes/Wraith/Animations/HitReact_Front.HitReact_Front"));

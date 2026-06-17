@@ -9,6 +9,7 @@
 
 class UCameraComponent;
 class UHealthComponent;
+class UAnimationAsset;
 class UAnimMontage;
 class UAnimSequenceBase;
 class UInputAction;
@@ -53,6 +54,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "UI")
 	UWeaponComponent* GetWeaponComponent() const { return WeaponComponent; }
 
+	UFUNCTION(BlueprintPure, Category = "Health")
+	bool IsDead() const;
+
+	UFUNCTION(BlueprintCallable, Category = "Combat")
+	void HandleCombatEnded();
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
@@ -69,6 +76,7 @@ protected:
 	void StopFire();
 	void ToggleFireMode();
 	void Reload();
+	void RestartCombat();
 
 	UFUNCTION()
 	void HandleWeaponFired();
@@ -78,6 +86,9 @@ protected:
 
 	UFUNCTION()
 	void HandleDamaged(UHealthComponent* Component, float DamageAmount, AController* InstigatedBy, AActor* DamageCauser);
+
+	UFUNCTION()
+	void HandleDeath(UHealthComponent* Component, AController* InstigatedBy, AActor* DamageCauser);
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
 	TObjectPtr<USpringArmComponent> CameraBoom;
@@ -194,6 +205,9 @@ protected:
 	TObjectPtr<UInputAction> FireModeAction;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> RestartAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	int32 InputMappingPriority = 0;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input", meta = (ClampMin = "0.1", ClampMax = "0.5"))
@@ -203,6 +217,15 @@ protected:
 	TObjectPtr<UAnimMontage> FireMontage;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> FireAnimation;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> IdleAnimation;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> MoveAnimation;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
 	TObjectPtr<UAnimSequenceBase> ReloadAnimation;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
@@ -210,6 +233,9 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
 	TObjectPtr<UAnimSequenceBase> DodgeAnimation;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> DeathAnimation;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Damage", meta = (ClampMin = "0.01"))
 	float DamageFlashDuration = 0.2f;
@@ -224,6 +250,10 @@ private:
 	void StartDamageFlash();
 	void EndDamageFlash();
 	void SetDamageMaterialParameters(const FLinearColor& Color, float Strength);
+	void PlayDeathAnimation();
+	void PlayCharacterAnimation(UAnimationAsset* Animation, bool bRestoreLocomotion, float PlayRate = 1.0f);
+	void RestoreLocomotionAnimation();
+	void UpdateLocomotionAnimation();
 	void UpdateAimOffsets();
 	void ApplyAimAnimation();
 	void EndDodge();
@@ -245,9 +275,12 @@ private:
 	FTimerHandle DodgeCooldownTimerHandle;
 	FTimerHandle AimClickTimerHandle;
 	FTimerHandle DamageFlashTimerHandle;
+	FTimerHandle AnimationTimerHandle;
 	bool bIsDodging = false;
 	bool bCanDodge = true;
 	bool bIsSprinting = false;
 	bool bIsAiming = false;
 	bool bIsScoped = false;
+	bool bCombatActive = true;
+	bool bPlayingActionAnimation = false;
 };

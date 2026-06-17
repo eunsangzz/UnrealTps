@@ -79,6 +79,9 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Enemy|Damage", meta = (ClampMin = "0.01"))
 	float DamageFlashDuration = 0.2f;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Enemy|Death", meta = (ClampMin = "0.0"))
+	float CorpseLifetime = 8.0f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Enemy|Combat", meta = (ClampMin = "0.0"))
 	float AttackRange = 180.0f;
 
@@ -98,10 +101,10 @@ protected:
 	float IdleDuration = 1.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Enemy|Movement", meta = (ClampMin = "0.0"))
-	float PatrolSpeed = 300.0f;
+	float PatrolSpeed = 360.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Enemy|Movement", meta = (ClampMin = "0.0"))
-	float ChaseSpeed = 520.0f;
+	float ChaseSpeed = 600.0f;
 
 private:
 	void ConfigureForEnemyType();
@@ -141,6 +144,9 @@ private:
 protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
 	TObjectPtr<UBlendSpace> LocomotionBlendSpace;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
+	TObjectPtr<UAnimSequenceBase> LocomotionAnimation;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
 	TObjectPtr<UAnimSequenceBase> AttackAnimation;

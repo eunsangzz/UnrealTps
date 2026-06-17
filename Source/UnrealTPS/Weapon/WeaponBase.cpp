@@ -20,6 +20,20 @@ AWeaponBase::AWeaponBase()
 	WeaponMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("WeaponMesh"));
 	WeaponMesh->SetupAttachment(WeaponRoot);
 	WeaponMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
+	MuzzlePoint = CreateDefaultSubobject<USceneComponent>(TEXT("MuzzlePoint"));
+	MuzzlePoint->SetupAttachment(WeaponMesh);
+	MuzzlePoint->SetRelativeLocation(MuzzleOffset);
+}
+
+void AWeaponBase::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+
+	if (MuzzlePoint)
+	{
+		MuzzlePoint->SetRelativeLocation(MuzzleOffset);
+	}
 }
 
 void AWeaponBase::BeginPlay()
@@ -41,6 +55,12 @@ bool AWeaponBase::Fire()
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
 	AController* InstigatorController = OwnerPawn ? OwnerPawn->GetController() : nullptr;
 
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return false;
+	}
+
 	FVector ViewLocation = GetActorLocation();
 	FRotator ViewRotation = GetActorRotation();
 	if (InstigatorController)
@@ -48,11 +68,6 @@ bool AWeaponBase::Fire()
 		InstigatorController->GetPlayerViewPoint(ViewLocation, ViewRotation);
 	}
 
-	const FVector TraceStart = ViewLocation;
-	const FVector ShotDirection = ViewRotation.Vector();
-	const FVector TraceEnd = TraceStart + ShotDirection * FireRange;
-
-	FHitResult Hit;
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(WeaponFire), true);
 	QueryParams.AddIgnoredActor(this);
 	if (OwnerPawn)
@@ -60,13 +75,35 @@ bool AWeaponBase::Fire()
 		QueryParams.AddIgnoredActor(OwnerPawn);
 	}
 
-	const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
-	const FVector TraceImpactPoint = bHit ? Hit.ImpactPoint : TraceEnd;
+	const FVector AimTraceEnd = ViewLocation + ViewRotation.Vector() * FireRange;
+	FHitResult AimHit;
+	const bool bAimHit = World->LineTraceSingleByChannel(
+		AimHit,
+		ViewLocation,
+		AimTraceEnd,
+		ECC_Visibility,
+		QueryParams);
+	const FVector AimPoint = bAimHit ? AimHit.ImpactPoint : AimTraceEnd;
+
+	const FVector MuzzleLocation = MuzzlePoint ? MuzzlePoint->GetComponentLocation() : GetActorLocation();
+	const FVector MuzzleToAim = AimPoint - MuzzleLocation;
+	const FVector ShotDirection = MuzzleToAim.GetSafeNormal();
+	const FVector ShotTraceEnd = MuzzleLocation + ShotDirection * FireRange;
+
+	FHitResult Hit;
+	const bool bHit = World->LineTraceSingleByChannel(
+		Hit,
+		MuzzleLocation,
+		ShotTraceEnd,
+		ECC_Visibility,
+		QueryParams);
+	const FVector TraceImpactPoint = bHit ? Hit.ImpactPoint : ShotTraceEnd;
 
 	if (bDrawDebugTrace)
 	{
-		DrawDebugLine(GetWorld(), TraceStart, TraceImpactPoint, bHit ? FColor::Red : FColor::Green, false, DebugTraceTime, 0, 1.5f);
-		DrawDebugSphere(GetWorld(), TraceImpactPoint, 8.0f, 12, bHit ? FColor::Red : FColor::Green, false, DebugTraceTime);
+		DrawDebugLine(World, MuzzleLocation, TraceImpactPoint, bHit ? FColor::Red : FColor::Green, false, DebugTraceTime, 0, 1.5f);
+		DrawDebugSphere(World, MuzzleLocation, 5.0f, 8, FColor::Yellow, false, DebugTraceTime);
+		DrawDebugSphere(World, TraceImpactPoint, 8.0f, 12, bHit ? FColor::Red : FColor::Green, false, DebugTraceTime);
 	}
 
 	if (bHit)
