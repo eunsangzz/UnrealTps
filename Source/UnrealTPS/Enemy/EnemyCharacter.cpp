@@ -11,15 +11,15 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/SkeletalMeshComponent.h"
-#include "DrawDebugHelpers.h"
 #include "NavigationSystem.h"
 #include "Navigation/PathFollowingComponent.h"
 #include "TimerManager.h"
 #include "UObject/ConstructorHelpers.h"
 #include "../AI/TPSAIController.h"
+#include "../Components/EnemyCombatComponent.h"
+#include "../Components/EnemyPerceptionComponent.h"
 #include "../Components/HealthComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
-#include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInstanceDynamic.h"
 
 AEnemyCharacter::AEnemyCharacter()
@@ -36,6 +36,8 @@ AEnemyCharacter::AEnemyCharacter()
 	GetCharacterMovement()->BrakingDecelerationWalking = 800.0f;
 
 	HealthComponent = CreateDefaultSubobject<UHealthComponent>(TEXT("HealthComponent"));
+	CombatComponent = CreateDefaultSubobject<UEnemyCombatComponent>(TEXT("CombatComponent"));
+	PerceptionComponent = CreateDefaultSubobject<UEnemyPerceptionComponent>(TEXT("PerceptionComponent"));
 	DamageFlashLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("DamageFlashLight"));
 	DamageFlashLight->SetupAttachment(RootComponent);
 	DamageFlashLight->SetRelativeLocation(FVector(0.0f, 0.0f, 60.0f));
@@ -56,8 +58,6 @@ void AEnemyCharacter::BeginPlay()
 	HealthComponent->OnDeath.AddDynamic(this, &AEnemyCharacter::HandleDeath);
 	HealthComponent->OnDamaged.AddDynamic(this, &AEnemyCharacter::HandleDamaged);
 	InitializeAnimation();
-	SelectPatrolDestination();
-	ChangeState(EEnemyState::Patrol);
 }
 
 void AEnemyCharacter::Tick(float DeltaTime)
@@ -68,191 +68,50 @@ void AEnemyCharacter::Tick(float DeltaTime)
 
 	if (CurrentState != EEnemyState::Dead)
 	{
-		UpdateStateMachine(DeltaTime);
 		UpdateLocomotionAnimation();
 	}
 }
 
 void AEnemyCharacter::DrawDetectionRange() const
 {
-	if (!bDrawDetectionRange || !GetWorld() || CurrentState == EEnemyState::Dead)
+	if (PerceptionComponent)
 	{
-		return;
+		PerceptionComponent->DrawDetectionRange(this);
 	}
+}
 
-	const FVector EyeLocation = GetActorLocation() + FVector(0.0f, 0.0f, BaseEyeHeight);
-	const FColor DetectionColor = TargetActor ? FColor::Red : FColor::Yellow;
+float AEnemyCharacter::GetSightDistance() const
+{
+	return PerceptionComponent ? PerceptionComponent->GetSightDistance() : 0.0f;
+}
 
-	DrawDebugCone(
-		GetWorld(),
-		EyeLocation,
-		GetActorForwardVector(),
-		SightDistance,
-		FMath::DegreesToRadians(HorizontalSightAngle * 0.5f),
-		FMath::DegreesToRadians(VerticalSightAngle * 0.5f),
-		24,
-		DetectionColor,
-		false,
-		0.0f,
-		0,
-		2.0f);
+AActor* AEnemyCharacter::GetTargetActor() const
+{
+	return PerceptionComponent ? PerceptionComponent->GetTargetActor() : nullptr;
+}
+
+const FVector& AEnemyCharacter::GetLastKnownTargetLocation() const
+{
+	static const FVector ZeroVector = FVector::ZeroVector;
+	return PerceptionComponent ? PerceptionComponent->GetLastKnownTargetLocation() : ZeroVector;
+}
+
+float AEnemyCharacter::GetAttackRange() const
+{
+	return CombatComponent ? CombatComponent->GetAttackRange() : 0.0f;
 }
 
 void AEnemyCharacter::ConfigureForEnemyType()
 {
-	if (EnemyType == EEnemyType::Ranged)
+	if (PerceptionComponent)
 	{
-		SightDistance = FMath::Max(SightDistance, 3500.0f);
-		HorizontalSightAngle = FMath::Max(HorizontalSightAngle, 130.0f);
-		VerticalSightAngle = FMath::Max(VerticalSightAngle, 130.0f);
-		AttackRange = FMath::Max(AttackRange, 1800.0f);
-		AttackCooldown = FMath::Max(AttackCooldown, 1.5f);
-		AttackDamage = FMath::Max(AttackDamage, 10.0f);
-	}
-	else
-	{
-		SightDistance = FMath::Max(SightDistance, 2000.0f);
-		HorizontalSightAngle = 110.0f;
-		VerticalSightAngle = 100.0f;
-		AttackRange = FMath::Max(AttackRange, 180.0f);
-	}
-}
-
-void AEnemyCharacter::UpdateStateMachine(float DeltaTime)
-{
-	if (CurrentState == EEnemyState::Idle || CurrentState == EEnemyState::Patrol)
-	{
-		TryAcquireTarget();
-	}
-	else if (!TargetActor)
-	{
-		SelectPatrolDestination();
-		ChangeState(EEnemyState::Patrol);
-	}
-	else
-	{
-		const bool bCanSeeTarget = CanSeeTarget(TargetActor);
-		if (bCanSeeTarget)
-		{
-			LastKnownTargetLocation = TargetActor->GetActorLocation();
-			LastTargetSeenTime = GetWorld()->GetTimeSeconds();
-		}
-
-		const float LoseTargetDistance = SightDistance * LoseTargetDistanceMultiplier;
-		const bool bTargetTooFar = FVector::DistSquared2D(GetActorLocation(), TargetActor->GetActorLocation())
-			> FMath::Square(LoseTargetDistance);
-		const bool bMemoryExpired = GetWorld()->GetTimeSeconds() - LastTargetSeenTime > LoseSightGraceDuration;
-
-		if (bTargetTooFar || (!bCanSeeTarget && bMemoryExpired))
-		{
-			TargetActor = nullptr;
-			SelectPatrolDestination();
-			ChangeState(EEnemyState::Patrol);
-		}
+		PerceptionComponent->ConfigureForEnemyType(EnemyType);
 	}
 
-	switch (CurrentState)
+	if (CombatComponent)
 	{
-	case EEnemyState::Idle:
-		UpdateIdle(DeltaTime);
-		break;
-	case EEnemyState::Patrol:
-		UpdatePatrol();
-		break;
-	case EEnemyState::Chase:
-		UpdateChase();
-		break;
-	case EEnemyState::Attack:
-		UpdateAttack();
-		break;
-	default:
-		break;
+		CombatComponent->ConfigureForEnemyType(EnemyType);
 	}
-}
-
-void AEnemyCharacter::UpdateIdle(float DeltaTime)
-{
-	IdleElapsed += DeltaTime;
-	if (IdleElapsed >= IdleDuration)
-	{
-		SelectPatrolDestination();
-		ChangeState(EEnemyState::Patrol);
-	}
-}
-
-void AEnemyCharacter::UpdatePatrol()
-{
-	if (FVector::DistSquared2D(GetActorLocation(), PatrolDestination) <= FMath::Square(PatrolAcceptanceRadius))
-	{
-		SelectPatrolDestination();
-	}
-
-	const bool bFollowingNavigationPath = RequestNavigationMove(PatrolDestination, PatrolAcceptanceRadius);
-
-	if (!bFollowingNavigationPath || GetVelocity().SizeSquared2D() < FMath::Square(PatrolSpeed * 0.35f))
-	{
-		MoveDirectlyTo(PatrolDestination);
-	}
-}
-
-void AEnemyCharacter::UpdateChase()
-{
-	if (!TargetActor)
-	{
-		ChangeState(EEnemyState::Idle);
-		return;
-	}
-
-	if (IsTargetInAttackRange())
-	{
-		ChangeState(EEnemyState::Attack);
-		return;
-	}
-
-	const bool bHasCurrentSight = CanSeeTarget(TargetActor);
-	if (bHasCurrentSight)
-	{
-		LastKnownTargetLocation = TargetActor->GetActorLocation();
-		LastTargetSeenTime = GetWorld()->GetTimeSeconds();
-	}
-
-	const FVector ChaseDestination = bHasCurrentSight
-		? TargetActor->GetActorLocation()
-		: LastKnownTargetLocation;
-
-	const bool bFollowingNavigationPath = RequestNavigationMove(ChaseDestination, AttackRange * 0.8f);
-	if (AAIController* AIController = Cast<AAIController>(GetController()))
-	{
-		AIController->SetFocus(TargetActor);
-	}
-
-	if (!bFollowingNavigationPath || GetVelocity().SizeSquared2D() < FMath::Square(ChaseSpeed * 0.35f))
-	{
-		MoveDirectlyTo(ChaseDestination);
-	}
-}
-
-void AEnemyCharacter::UpdateAttack()
-{
-	if (!TargetActor)
-	{
-		ChangeState(EEnemyState::Idle);
-		return;
-	}
-
-	if (!IsTargetInAttackRange())
-	{
-		ChangeState(EEnemyState::Chase);
-		return;
-	}
-
-	if (AAIController* AIController = Cast<AAIController>(GetController()))
-	{
-		AIController->StopMovement();
-		AIController->SetFocus(TargetActor);
-	}
-
-	PerformAttack();
 }
 
 void AEnemyCharacter::ChangeState(EEnemyState NewState)
@@ -267,7 +126,6 @@ void AEnemyCharacter::ChangeState(EEnemyState NewState)
 
 	if (NewState == EEnemyState::Idle)
 	{
-		IdleElapsed = 0.0f;
 		GetCharacterMovement()->MaxWalkSpeed = PatrolSpeed;
 
 		if (AAIController* AIController = Cast<AAIController>(GetController()))
@@ -290,6 +148,28 @@ void AEnemyCharacter::ChangeState(EEnemyState NewState)
 	OnEnemyStateChanged.Broadcast(PreviousState, NewState);
 }
 
+void AEnemyCharacter::SetAIState(EEnemyState NewState)
+{
+	ChangeState(NewState);
+}
+
+void AEnemyCharacter::SetAITarget(AActor* NewTarget)
+{
+	if (PerceptionComponent)
+	{
+		PerceptionComponent->SetTarget(NewTarget, GetWorld());
+	}
+}
+
+void AEnemyCharacter::ClearAITarget()
+{
+	if (PerceptionComponent)
+	{
+		PerceptionComponent->ClearTarget();
+	}
+	LastMoveRequestDestination = FVector(FLT_MAX);
+}
+
 void AEnemyCharacter::SelectPatrolDestination()
 {
 	const FVector PatrolCenter = GetActorLocation();
@@ -309,6 +189,16 @@ void AEnemyCharacter::SelectPatrolDestination()
 			PatrolDestination = NavLocation.Location;
 		}
 	}
+}
+
+bool AEnemyCharacter::HasReachedPatrolDestination() const
+{
+	return FVector::DistSquared2D(GetActorLocation(), PatrolDestination) <= FMath::Square(PatrolAcceptanceRadius);
+}
+
+bool AEnemyCharacter::RequestAIMove(const FVector& Destination, float AcceptanceRadius)
+{
+	return RequestNavigationMove(Destination, AcceptanceRadius);
 }
 
 bool AEnemyCharacter::RequestNavigationMove(const FVector& Destination, float AcceptanceRadius)
@@ -372,92 +262,36 @@ void AEnemyCharacter::MoveDirectlyTo(const FVector& Destination)
 
 void AEnemyCharacter::PerformAttack()
 {
-	const UWorld* World = GetWorld();
-	if (!World || !TargetActor || World->GetTimeSeconds() - LastAttackTime < AttackCooldown)
+	if (CombatComponent)
 	{
-		return;
+		CombatComponent->PerformAttack(this, GetTargetActor());
 	}
-
-	if (!HasLineOfSightToTarget(TargetActor))
-	{
-		return;
-	}
-
-	LastAttackTime = World->GetTimeSeconds();
-	PlayAttackAnimation();
-	UGameplayStatics::ApplyDamage(TargetActor, AttackDamage, GetController(), this, nullptr);
-}
-
-bool AEnemyCharacter::TryAcquireTarget()
-{
-	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
-	if (!PlayerPawn || !CanSeeTarget(PlayerPawn))
-	{
-		return false;
-	}
-
-	TargetActor = PlayerPawn;
-	LastKnownTargetLocation = PlayerPawn->GetActorLocation();
-	LastTargetSeenTime = GetWorld()->GetTimeSeconds();
-	ChangeState(IsTargetInAttackRange() ? EEnemyState::Attack : EEnemyState::Chase);
-	return true;
 }
 
 bool AEnemyCharacter::CanSeeTarget(const AActor* Target) const
 {
-	if (!Target)
-	{
-		return false;
-	}
-
-	const FVector EyeLocation = GetActorLocation() + FVector(0.0f, 0.0f, BaseEyeHeight);
-	const FVector TargetLocation = Target->GetActorLocation();
-	const FVector ToTarget = TargetLocation - EyeLocation;
-
-	if (ToTarget.SizeSquared() > FMath::Square(SightDistance))
-	{
-		return false;
-	}
-
-	const FVector LocalDirection = GetActorTransform().InverseTransformVectorNoScale(ToTarget.GetSafeNormal());
-	const float HorizontalAngle = FMath::Abs(FMath::RadiansToDegrees(FMath::Atan2(LocalDirection.Y, LocalDirection.X)));
-	const float VerticalAngle = FMath::Abs(FMath::RadiansToDegrees(
-		FMath::Atan2(LocalDirection.Z, FVector2D(LocalDirection.X, LocalDirection.Y).Size())));
-
-	if (HorizontalAngle > HorizontalSightAngle * 0.5f || VerticalAngle > VerticalSightAngle * 0.5f)
-	{
-		return false;
-	}
-
-	return HasLineOfSightToTarget(Target);
+	return PerceptionComponent && PerceptionComponent->CanSeeTarget(this, Target);
 }
 
 bool AEnemyCharacter::IsTargetInAttackRange() const
 {
-	return TargetActor && FVector::DistSquared(GetActorLocation(), TargetActor->GetActorLocation()) <= FMath::Square(AttackRange);
+	return CombatComponent && CombatComponent->IsTargetInAttackRange(this, GetTargetActor());
+}
+
+bool AEnemyCharacter::ShouldLoseTarget() const
+{
+	return PerceptionComponent && PerceptionComponent->ShouldLoseTarget(this);
 }
 
 bool AEnemyCharacter::HasLineOfSightToTarget(const AActor* Target) const
 {
-	if (!Target || !GetWorld())
-	{
-		return false;
-	}
-
-	const FVector TraceStart = GetActorLocation() + FVector(0.0f, 0.0f, BaseEyeHeight);
-	const FVector TraceEnd = Target->GetActorLocation() + FVector(0.0f, 0.0f, 50.0f);
-
-	FHitResult Hit;
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(EnemyLineOfSight), true, this);
-	const bool bHit = GetWorld()->LineTraceSingleByChannel(Hit, TraceStart, TraceEnd, ECC_Visibility, QueryParams);
-
-	return !bHit || Hit.GetActor() == Target;
+	return PerceptionComponent && PerceptionComponent->HasLineOfSightToTarget(this, Target);
 }
 
 void AEnemyCharacter::HandleDeath(UHealthComponent* Component, AController* InstigatedBy, AActor* DamageCauser)
 {
 	ChangeState(EEnemyState::Dead);
-	TargetActor = nullptr;
+	ClearAITarget();
 	PlayDeathAnimation();
 
 	if (AAIController* AIController = Cast<AAIController>(GetController()))
@@ -482,9 +316,7 @@ void AEnemyCharacter::HandleDamaged(UHealthComponent* Component, float DamageAmo
 		AActor* Aggressor = InstigatedBy ? InstigatedBy->GetPawn() : DamageCauser;
 		if (Aggressor)
 		{
-			TargetActor = Aggressor;
-			LastKnownTargetLocation = Aggressor->GetActorLocation();
-			LastTargetSeenTime = GetWorld()->GetTimeSeconds();
+			SetAITarget(Aggressor);
 			ChangeState(IsTargetInAttackRange() ? EEnemyState::Attack : EEnemyState::Chase);
 		}
 

@@ -7,6 +7,9 @@
 #include "Engine/Engine.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
+#include "Particles/ParticleSystem.h"
+#include "Sound/SoundBase.h"
+#include "WeaponData.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogTPSWeapon, Log, All);
 
@@ -30,6 +33,8 @@ void AWeaponBase::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
 
+	ApplyWeaponData(true);
+
 	if (MuzzlePoint)
 	{
 		MuzzlePoint->SetRelativeLocation(MuzzleOffset);
@@ -40,6 +45,7 @@ void AWeaponBase::BeginPlay()
 {
 	Super::BeginPlay();
 
+	ApplyWeaponData(true);
 	CurrentAmmo = FMath::Clamp(CurrentAmmo, 0, MaxAmmo);
 }
 
@@ -61,6 +67,21 @@ bool AWeaponBase::Fire()
 		return false;
 	}
 
+	const FVector MuzzleLocation = MuzzlePoint ? MuzzlePoint->GetComponentLocation() : GetActorLocation();
+	const FRotator MuzzleRotation = MuzzlePoint ? MuzzlePoint->GetComponentRotation() : GetActorRotation();
+	if (WeaponData)
+	{
+		if (WeaponData->FireSound)
+		{
+			UGameplayStatics::PlaySoundAtLocation(this, WeaponData->FireSound, MuzzleLocation);
+		}
+
+		if (WeaponData->MuzzleEffect)
+		{
+			UGameplayStatics::SpawnEmitterAtLocation(World, WeaponData->MuzzleEffect, MuzzleLocation, MuzzleRotation);
+		}
+	}
+
 	FVector ViewLocation = GetActorLocation();
 	FRotator ViewRotation = GetActorRotation();
 	if (InstigatorController)
@@ -75,6 +96,7 @@ bool AWeaponBase::Fire()
 		QueryParams.AddIgnoredActor(OwnerPawn);
 	}
 
+	const float FireRange = WeaponData ? WeaponData->FireRange : 10000.0f;
 	const FVector AimTraceEnd = ViewLocation + ViewRotation.Vector() * FireRange;
 	FHitResult AimHit;
 	const bool bAimHit = World->LineTraceSingleByChannel(
@@ -85,7 +107,6 @@ bool AWeaponBase::Fire()
 		QueryParams);
 	const FVector AimPoint = bAimHit ? AimHit.ImpactPoint : AimTraceEnd;
 
-	const FVector MuzzleLocation = MuzzlePoint ? MuzzlePoint->GetComponentLocation() : GetActorLocation();
 	const FVector MuzzleToAim = AimPoint - MuzzleLocation;
 	const FVector ShotDirection = MuzzleToAim.GetSafeNormal();
 	const FVector ShotTraceEnd = MuzzleLocation + ShotDirection * FireRange;
@@ -117,6 +138,7 @@ bool AWeaponBase::Fire()
 			GEngine->AddOnScreenDebugMessage(-1, 1.5f, FColor::Yellow, HitMessage);
 		}
 
+		const float Damage = WeaponData ? WeaponData->Damage : 20.0f;
 		UGameplayStatics::ApplyDamage(HitActor, Damage, InstigatorController, this, nullptr);
 	}
 
@@ -141,5 +163,26 @@ bool AWeaponBase::Reload()
 
 float AWeaponBase::GetFireInterval() const
 {
+	const float FireRate = WeaponData ? WeaponData->FireRate : 10.0f;
 	return FireRate > 0.0f ? 1.0f / FireRate : 0.1f;
+}
+
+void AWeaponBase::ApplyWeaponData(bool bResetAmmo)
+{
+	if (!WeaponData)
+	{
+		return;
+	}
+
+	MaxAmmo = FMath::Max(1, WeaponData->MaxAmmo);
+	if (bResetAmmo)
+	{
+		CurrentAmmo = MaxAmmo;
+		ReserveAmmo = FMath::Max(0, WeaponData->ReserveAmmo);
+	}
+
+	if (WeaponMesh)
+	{
+		WeaponMesh->SetStaticMesh(WeaponData->WeaponMesh);
+	}
 }

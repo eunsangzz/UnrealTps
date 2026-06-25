@@ -18,6 +18,7 @@ class UMaterialInstanceDynamic;
 class UPointLightComponent;
 class UWeaponComponent;
 class USpringArmComponent;
+class UWeaponData;
 
 UCLASS()
 class UNREALTPS_API ATPSCharacter : public ACharacter
@@ -128,15 +129,6 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera", meta = (ClampMin = "1.0"))
 	float AimTransitionSpeed = 14.0f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera|Recoil", meta = (ClampMin = "0.0"))
-	float RecoilPitchMin = 0.7f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera|Recoil", meta = (ClampMin = "0.0"))
-	float RecoilPitchMax = 1.2f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera|Recoil", meta = (ClampMin = "0.0"))
-	float RecoilYaw = 0.35f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Camera|Recoil", meta = (ClampMin = "0.1"))
 	float RecoilRecoverySpeed = 12.0f;

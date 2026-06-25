@@ -26,6 +26,7 @@
 #include "../Components/WeaponComponent.h"
 #include "../TPSGameMode.h"
 #include "../Weapon/WeaponBase.h"
+#include "../Weapon/WeaponData.h"
 
 ATPSCharacter::ATPSCharacter()
 {
@@ -707,7 +708,12 @@ void ATPSCharacter::ApplyRecoil()
 	}
 
 	const float AimScale = bIsScoped ? 0.55f : (bIsAiming ? 0.75f : 1.0f);
-	const float PitchKick = FMath::FRandRange(RecoilPitchMin, RecoilPitchMax) * AimScale;
+	const UWeaponData* WeaponData = WeaponComponent && WeaponComponent->CurrentWeapon
+		? WeaponComponent->CurrentWeapon->GetWeaponData()
+		: nullptr;
+	const float RecoilPitch = WeaponData ? WeaponData->RecoilPitch : 1.0f;
+	const float RecoilYaw = WeaponData ? WeaponData->RecoilYaw : 0.35f;
+	const float PitchKick = RecoilPitch * AimScale;
 	const float YawKick = FMath::FRandRange(-RecoilYaw, RecoilYaw) * AimScale;
 
 	AddControllerPitchInput(-PitchKick);

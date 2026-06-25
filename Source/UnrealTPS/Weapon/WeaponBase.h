@@ -7,6 +7,7 @@
 #include "WeaponBase.generated.h"
 
 class UStaticMeshComponent;
+class UWeaponData;
 
 UCLASS()
 class UNREALTPS_API AWeaponBase : public AActor
@@ -34,6 +35,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Weapon")
 	float GetFireInterval() const;
 
+	UFUNCTION(BlueprintPure, Category = "Weapon")
+	UWeaponData* GetWeaponData() const { return WeaponData; }
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Weapon")
 	TObjectPtr<USceneComponent> WeaponRoot;
 
@@ -46,23 +50,17 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon|Fire")
 	FVector MuzzleOffset = FVector(100.0f, 0.0f, 0.0f);
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon|Ammo")
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon|Data")
+	TObjectPtr<UWeaponData> WeaponData;
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Weapon|Ammo")
 	int32 MaxAmmo = 30;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Weapon|Ammo")
 	int32 CurrentAmmo = 30;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Weapon|Ammo")
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Weapon|Ammo")
 	int32 ReserveAmmo = 90;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon|Fire")
-	float FireRate = 10.0f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon|Fire")
-	float FireRange = 10000.0f;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon|Fire")
-	float Damage = 20.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Weapon|Debug")
 	bool bDrawDebugTrace = true;
@@ -73,4 +71,7 @@ public:
 protected:
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void BeginPlay() override;
+
+private:
+	void ApplyWeaponData(bool bResetAmmo);
 };
